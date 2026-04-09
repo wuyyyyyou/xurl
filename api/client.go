@@ -11,13 +11,13 @@ import (
 	"time"
 
 	"bufio"
-	"mime/multipart"
-	"os"
-	"path/filepath"
 	"github.com/xdevplatform/xurl/auth"
 	"github.com/xdevplatform/xurl/config"
 	xurlErrors "github.com/xdevplatform/xurl/errors"
 	"github.com/xdevplatform/xurl/version"
+	"mime/multipart"
+	"os"
+	"path/filepath"
 )
 
 // RequestOptions contains common options for API requests
@@ -310,9 +310,13 @@ func (c *ApiClient) buildBaseRequest(method, endpoint string, body io.Reader, co
 
 	// Add authorization header if not already set
 	if req.Header.Get("Authorization") == "" {
-		authHeader, err := c.getAuthHeader(httpMethod, url, authType, username)
-		if err == nil {
-			req.Header.Add("Authorization", authHeader)
+		if accessToken := strings.TrimSpace(os.Getenv("XURL_EXECUTA_OAUTH2_ACCESS_TOKEN")); accessToken != "" {
+			req.Header.Add("Authorization", "Bearer "+accessToken)
+		} else {
+			authHeader, err := c.getAuthHeader(httpMethod, url, authType, username)
+			if err == nil {
+				req.Header.Add("Authorization", authHeader)
+			}
 		}
 	}
 

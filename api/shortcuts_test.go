@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -78,10 +79,15 @@ func setupShortcutServer() *httptest.Server {
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{"data":{"deleted":true}}`))
 
-		// GET /2/tweets/search/recent — search posts
-		case strings.HasPrefix(r.URL.Path, "/2/tweets/search/recent") && r.Method == "GET":
+		// GET /2/tweets/search/recent|all — search posts
+		case (strings.HasPrefix(r.URL.Path, "/2/tweets/search/recent") || strings.HasPrefix(r.URL.Path, "/2/tweets/search/all")) && r.Method == "GET":
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"data":[{"id":"1","text":"result one"}],"meta":{"result_count":1}}`))
+			w.Write([]byte(fmt.Sprintf(`{"data":[{"id":"1","text":"result one"}],"meta":{"result_count":1},"debug":{"sort_order":%q,"path":%q}}`, r.URL.Query().Get("sort_order"), r.URL.Path)))
+
+		// GET /2/users/search — search people
+		case strings.HasPrefix(r.URL.Path, "/2/users/search") && r.Method == "GET":
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"data":[{"id":"200","username":"ai_person","name":"AI Person"}],"meta":{"result_count":1}}`))
 
 		// GET /2/tweets/:id — read post
 		case strings.HasPrefix(r.URL.Path, "/2/tweets/") && r.Method == "GET":
@@ -228,16 +234,80 @@ func TestSearchPosts(t *testing.T) {
 	defer server.Close()
 	client := shortcutClient(t, server)
 
-	resp, err := SearchPosts(client, "golang", 10, baseTestOpts())
+	resp, err := SearchPosts(client, "golang", 10, SearchSortLatest, SearchScopeRecent, baseTestOpts())
 	require.NoError(t, err)
 
 	var result struct {
+		Debug struct {
+			SortOrder string `json:"sort_order"`
+			Path      string `json:"path"`
+		} `json:"debug"`
 		Meta struct {
 			ResultCount int `json:"result_count"`
 		} `json:"meta"`
 	}
 	require.NoError(t, json.Unmarshal(resp, &result))
 	assert.Equal(t, 1, result.Meta.ResultCount)
+	assert.Equal(t, "recency", result.Debug.SortOrder)
+	assert.Equal(t, "/2/tweets/search/recent", result.Debug.Path)
+}
+
+func TestSearchPostsTop(t *testing.T) {
+	server := setupShortcutServer()
+	defer server.Close()
+	client := shortcutClient(t, server)
+
+	resp, err := SearchPosts(client, "golang", 10, SearchSortTop, SearchScopeRecent, baseTestOpts())
+	require.NoError(t, err)
+
+	var result struct {
+		Debug struct {
+			SortOrder string `json:"sort_order"`
+			Path      string `json:"path"`
+		} `json:"debug"`
+	}
+	require.NoError(t, json.Unmarshal(resp, &result))
+	assert.Equal(t, "relevancy", result.Debug.SortOrder)
+	assert.Equal(t, "/2/tweets/search/recent", result.Debug.Path)
+}
+
+func TestSearchPostsAllScope(t *testing.T) {
+	server := setupShortcutServer()
+	defer server.Close()
+	client := shortcutClient(t, server)
+
+	resp, err := SearchPosts(client, "golang", 10, SearchSortTop, SearchScopeAll, baseTestOpts())
+	require.NoError(t, err)
+
+	var result struct {
+		Debug struct {
+			SortOrder string `json:"sort_order"`
+			Path      string `json:"path"`
+		} `json:"debug"`
+	}
+	require.NoError(t, json.Unmarshal(resp, &result))
+	assert.Equal(t, "relevancy", result.Debug.SortOrder)
+	assert.Equal(t, "/2/tweets/search/all", result.Debug.Path)
+}
+
+func TestSearchUsers(t *testing.T) {
+	server := setupShortcutServer()
+	defer server.Close()
+	client := shortcutClient(t, server)
+
+	resp, err := SearchUsers(client, "ai", 10, baseTestOpts())
+	require.NoError(t, err)
+
+	var result struct {
+		Data []struct {
+			ID       string `json:"id"`
+			Username string `json:"username"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(resp, &result))
+	require.Len(t, result.Data, 1)
+	assert.Equal(t, "200", result.Data[0].ID)
+	assert.Equal(t, "ai_person", result.Data[0].Username)
 }
 
 // ---- GetMe ----

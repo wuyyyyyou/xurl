@@ -312,6 +312,8 @@ func (c *ApiClient) buildBaseRequest(method, endpoint string, body io.Reader, co
 	if req.Header.Get("Authorization") == "" {
 		if accessToken := strings.TrimSpace(os.Getenv("XURL_EXECUTA_OAUTH2_ACCESS_TOKEN")); accessToken != "" {
 			req.Header.Add("Authorization", "Bearer "+accessToken)
+		} else if bearerToken := strings.TrimSpace(os.Getenv("XURL_EXECUTA_BEARER_TOKEN")); bearerToken != "" {
+			req.Header.Add("Authorization", "Bearer "+bearerToken)
 		} else {
 			authHeader, err := c.getAuthHeader(httpMethod, url, authType, username)
 			if err == nil {

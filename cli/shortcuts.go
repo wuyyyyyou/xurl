@@ -254,23 +254,49 @@ Examples:
 
 func searchCmd(a *auth.Auth) *cobra.Command {
 	var maxResults int
+	var searchType string
+	var sortOrder string
+	var searchScope string
 	cmd := &cobra.Command{
 		Use:   `search "QUERY"`,
-		Short: "Search recent posts",
-		Long: `Search recent posts matching a query.
+		Short: "Search posts or people",
+		Long: `Search posts or people matching a query.
 
 Examples:
   xurl search "golang"
   xurl search "from:elonmusk" -n 20
-  xurl search "#buildinpublic" -n 15`,
+  xurl search "#buildinpublic" -n 15
+  xurl search "AI -is:retweet" --sort top -n 20
+  xurl search "AI -is:retweet" --sort top --scope all -n 20
+  xurl search "AI agent" --type people -n 20`,
 		Args: cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			client := newClient(a)
 			opts := baseOpts(cmd)
-			printResult(api.SearchPosts(client, args[0], maxResults, opts))
+
+			switch searchType {
+			case string(api.SearchTypePosts):
+				printResult(api.SearchPosts(client, args[0], maxResults, api.SearchSort(sortOrder), api.SearchScope(searchScope), opts))
+			case string(api.SearchTypePeople):
+				if sortOrder != string(api.SearchSortLatest) {
+					fmt.Fprintf(os.Stderr, "\033[31mError: --sort is only supported for post search\033[0m\n")
+					os.Exit(1)
+				}
+				if searchScope != string(api.SearchScopeRecent) {
+					fmt.Fprintf(os.Stderr, "\033[31mError: --scope is only supported for post search\033[0m\n")
+					os.Exit(1)
+				}
+				printResult(api.SearchUsers(client, args[0], maxResults, opts))
+			default:
+				fmt.Fprintf(os.Stderr, "\033[31mError: invalid --type value: %s\033[0m\n", searchType)
+				os.Exit(1)
+			}
 		},
 	}
 	cmd.Flags().IntVarP(&maxResults, "max-results", "n", 10, "Number of results (min 10, max 100)")
+	cmd.Flags().StringVar(&searchType, "type", string(api.SearchTypePosts), "Search type: posts or people")
+	cmd.Flags().StringVar(&sortOrder, "sort", string(api.SearchSortLatest), "Post search sort: latest or top")
+	cmd.Flags().StringVar(&searchScope, "scope", string(api.SearchScopeRecent), "Post search scope: recent or all")
 	addCommonFlags(cmd)
 	return cmd
 }

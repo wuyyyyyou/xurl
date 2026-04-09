@@ -7,6 +7,27 @@ import (
 	"strings"
 )
 
+type SearchType string
+
+const (
+	SearchTypePosts  SearchType = "posts"
+	SearchTypePeople SearchType = "people"
+)
+
+type SearchSort string
+
+const (
+	SearchSortTop    SearchSort = "top"
+	SearchSortLatest SearchSort = "latest"
+)
+
+type SearchScope string
+
+const (
+	SearchScopeRecent SearchScope = "recent"
+	SearchScopeAll    SearchScope = "all"
+)
+
 // ------------------------------------------------
 // Request‑body helpers for the X API v2 shortcuts
 // ------------------------------------------------
@@ -158,8 +179,8 @@ func ReadPost(client Client, postID string, opts RequestOptions) (json.RawMessag
 	return client.SendRequest(opts)
 }
 
-// SearchPosts searches recent posts.
-func SearchPosts(client Client, query string, maxResults int, opts RequestOptions) (json.RawMessage, error) {
+// SearchPosts searches posts.
+func SearchPosts(client Client, query string, maxResults int, sort SearchSort, scope SearchScope, opts RequestOptions) (json.RawMessage, error) {
 	q := url.QueryEscape(query)
 
 	// X API enforces min 10 / max 100 for search
@@ -169,8 +190,35 @@ func SearchPosts(client Client, query string, maxResults int, opts RequestOption
 		maxResults = 100
 	}
 
+	sortOrder := "recency"
+	if sort == SearchSortTop {
+		sortOrder = "relevancy"
+	}
+
+	searchPath := "/2/tweets/search/recent"
+	if scope == SearchScopeAll {
+		searchPath = "/2/tweets/search/all"
+	}
+
 	opts.Method = "GET"
-	opts.Endpoint = fmt.Sprintf("/2/tweets/search/recent?query=%s&max_results=%d&tweet.fields=created_at,public_metrics,conversation_id,entities&expansions=author_id&user.fields=username,name,verified", q, maxResults)
+	opts.Endpoint = fmt.Sprintf("%s?query=%s&max_results=%d&sort_order=%s&tweet.fields=created_at,public_metrics,conversation_id,entities&expansions=author_id&user.fields=username,name,verified", searchPath, q, maxResults, sortOrder)
+	opts.Data = ""
+
+	return client.SendRequest(opts)
+}
+
+// SearchUsers searches people by query.
+func SearchUsers(client Client, query string, maxResults int, opts RequestOptions) (json.RawMessage, error) {
+	q := url.QueryEscape(query)
+
+	if maxResults < 1 {
+		maxResults = 1
+	} else if maxResults > 100 {
+		maxResults = 100
+	}
+
+	opts.Method = "GET"
+	opts.Endpoint = fmt.Sprintf("/2/users/search?query=%s&max_results=%d&user.fields=created_at,description,public_metrics,verified,profile_image_url", q, maxResults)
 	opts.Data = ""
 
 	return client.SendRequest(opts)

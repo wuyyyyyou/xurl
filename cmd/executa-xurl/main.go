@@ -22,9 +22,11 @@ import (
 )
 
 const (
-	internalCLICommand = "__xurl_cli"
-	credentialName     = "X_OAUTH2_ACCESS_TOKEN"
-	tokenEnvKey        = "XURL_EXECUTA_OAUTH2_ACCESS_TOKEN"
+	internalCLICommand   = "__xurl_cli"
+	userCredentialName   = "X_OAUTH2_ACCESS_TOKEN"
+	bearerCredentialName = "X_BEARER_TOKEN"
+	userTokenEnvKey      = "XURL_EXECUTA_OAUTH2_ACCESS_TOKEN"
+	bearerTokenEnvKey    = "XURL_EXECUTA_BEARER_TOKEN"
 )
 
 var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
@@ -37,10 +39,17 @@ var manifest = map[string]any{
 	"author":       "xdevplatform + ANNA",
 	"credentials": []map[string]any{
 		{
-			"name":         credentialName,
+			"name":         userCredentialName,
 			"display_name": "X OAuth2 Access Token",
-			"description":  "OAuth 2.0 Bearer access token used for all xurl requests.",
-			"required":     true,
+			"description":  "OAuth 2.0 user-context access token. Used for timeline, posting, reply, DM, and most user operations.",
+			"required":     false,
+			"sensitive":    true,
+		},
+		{
+			"name":         bearerCredentialName,
+			"display_name": "X App-Only Bearer Token",
+			"description":  "App-only bearer token. Used automatically for search --scope all and other app-only search endpoints.",
+			"required":     false,
 			"sensitive":    true,
 		},
 	},
@@ -222,12 +231,12 @@ func handleInvoke(req rpcRequest) rpcResponse {
 		return invalidParamsResponse(req.ID, err.Error())
 	}
 
-	token := resolveAccessToken(req.Params)
-	if token == "" {
-		return invalidParamsResponse(req.ID, fmt.Sprintf("missing credential %q", credentialName))
+	authSelection, err := resolveAuthSelection(args, req.Params)
+	if err != nil {
+		return invalidParamsResponse(req.ID, err.Error())
 	}
 
-	outputPath, result, err := runXURLCommand(args, cwd, token)
+	outputPath, result, err := runXURLCommand(args, cwd, authSelection)
 	if err != nil {
 		return rpcResponse{
 			JSONRPC: "2.0",
@@ -335,20 +344,80 @@ func resolveCWD(arguments map[string]any) (string, error) {
 	return filepath.Dir(execPath), nil
 }
 
-func resolveAccessToken(params map[string]any) string {
+type authSelection struct {
+	envKey string
+	token  string
+}
+
+func resolveUserToken(params map[string]any) string {
 	context, _ := params["context"].(map[string]any)
 	if context != nil {
 		credentials, _ := context["credentials"].(map[string]any)
 		if credentials != nil {
-			if token, ok := credentials[credentialName].(string); ok {
+			if token, ok := credentials[userCredentialName].(string); ok {
 				return strings.TrimSpace(token)
 			}
 		}
 	}
-	return strings.TrimSpace(os.Getenv(credentialName))
+	return strings.TrimSpace(os.Getenv(userCredentialName))
 }
 
-func runXURLCommand(args []string, cwd string, token string) (string, commandResult, error) {
+func resolveBearerToken(params map[string]any) string {
+	context, _ := params["context"].(map[string]any)
+	if context != nil {
+		credentials, _ := context["credentials"].(map[string]any)
+		if credentials != nil {
+			if token, ok := credentials[bearerCredentialName].(string); ok {
+				return strings.TrimSpace(token)
+			}
+		}
+	}
+	return strings.TrimSpace(os.Getenv(bearerCredentialName))
+}
+
+func resolveAuthSelection(args []string, params map[string]any) (authSelection, error) {
+	if requiresAppOnlyAuth(args) {
+		token := resolveBearerToken(params)
+		if token == "" {
+			return authSelection{}, fmt.Errorf("missing credential %q for app-only search", bearerCredentialName)
+		}
+		return authSelection{envKey: bearerTokenEnvKey, token: token}, nil
+	}
+
+	token := resolveUserToken(params)
+	if token == "" {
+		return authSelection{}, fmt.Errorf("missing credential %q", userCredentialName)
+	}
+	return authSelection{envKey: userTokenEnvKey, token: token}, nil
+}
+
+func requiresAppOnlyAuth(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+
+	if args[0] == "search" {
+		for i := 0; i < len(args); i++ {
+			arg := args[i]
+			if arg == "--scope" && i+1 < len(args) && args[i+1] == "all" {
+				return true
+			}
+			if arg == "--scope=all" {
+				return true
+			}
+		}
+	}
+
+	for _, arg := range args {
+		if strings.Contains(arg, "/2/tweets/search/all") {
+			return true
+		}
+	}
+
+	return false
+}
+
+func runXURLCommand(args []string, cwd string, auth authSelection) (string, commandResult, error) {
 	executable, err := os.Executable()
 	if err != nil {
 		return "", commandResult{}, fmt.Errorf("failed to resolve plugin executable: %w", err)
@@ -357,7 +426,7 @@ func runXURLCommand(args []string, cwd string, token string) (string, commandRes
 	cmdArgs := append([]string{internalCLICommand}, args...)
 	cmd := exec.Command(executable, cmdArgs...)
 	cmd.Dir = cwd
-	cmd.Env = append(os.Environ(), tokenEnvKey+"="+token)
+	cmd.Env = append(os.Environ(), auth.envKey+"="+auth.token)
 
 	var stdoutBuf bytes.Buffer
 	var stderrBuf bytes.Buffer
@@ -378,8 +447,8 @@ func runXURLCommand(args []string, cwd string, token string) (string, commandRes
 		}
 	}
 
-	cleanStdout := redactSecret(stripANSI(stdoutBuf.String()), token)
-	cleanStderr := redactSecret(stripANSI(stderrBuf.String()), token)
+	cleanStdout := redactSecret(stripANSI(stdoutBuf.String()), auth.token)
+	cleanStderr := redactSecret(stripANSI(stderrBuf.String()), auth.token)
 
 	result := commandResult{
 		Command:        strings.Join(args, " "),

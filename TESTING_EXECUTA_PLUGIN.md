@@ -17,6 +17,7 @@
 ```fish
 set -x BINARY ./dist/xurl-executa
 set -x X_TOKEN YOUR_X_OAUTH2_ACCESS_TOKEN
+set -x X_BEARER_TOKEN YOUR_X_APP_ONLY_BEARER_TOKEN
 set -x X_CWD /tmp/xurl-plugin-test
 mkdir -p $X_CWD
 ```
@@ -40,7 +41,8 @@ function xrun
         --argjson args "$args_json" \
         --arg cwd "$X_CWD" \
         --arg token "$X_TOKEN" \
-        '{jsonrpc:"2.0",method:"invoke",params:{tool:"run_xurl",arguments:{args:$args,cwd:$cwd},context:{credentials:{X_OAUTH2_ACCESS_TOKEN:$token}}},id:1}')
+        --arg bearer "$X_BEARER_TOKEN" \
+        '{jsonrpc:"2.0",method:"invoke",params:{tool:"run_xurl",arguments:{args:$args,cwd:$cwd},context:{credentials:{X_OAUTH2_ACCESS_TOKEN:$token,X_BEARER_TOKEN:$bearer}}},id:1}')
 
     set -l resp_file (printf '%s\n' $req | $BINARY | jq -r '.__file_transport')
     set -l out_file (cat $resp_file | jq -r '.result.data.output_file')
@@ -54,7 +56,8 @@ function xrun_file
         --argjson args "$args_json" \
         --arg cwd "$X_CWD" \
         --arg token "$X_TOKEN" \
-        '{jsonrpc:"2.0",method:"invoke",params:{tool:"run_xurl",arguments:{args:$args,cwd:$cwd},context:{credentials:{X_OAUTH2_ACCESS_TOKEN:$token}}},id:1}')
+        --arg bearer "$X_BEARER_TOKEN" \
+        '{jsonrpc:"2.0",method:"invoke",params:{tool:"run_xurl",arguments:{args:$args,cwd:$cwd},context:{credentials:{X_OAUTH2_ACCESS_TOKEN:$token,X_BEARER_TOKEN:$bearer}}},id:1}')
 
     set -l resp_file (printf '%s\n' $req | $BINARY | jq -r '.__file_transport')
     cat $resp_file | jq -r '.result.data.output_file'
@@ -131,19 +134,28 @@ xrun timeline -n 20
 
 ### 方式 2：按热点关键词搜索
 
+现在 `search` 支持：
+
+- `--sort latest`：更接近 X 搜索里的 `Latest`
+- `--sort top`：更接近 X 搜索里的 `Top`
+- `--scope recent`：只搜最近一段时间
+- `--scope all`：搜更完整的历史范围（是否可用取决于你的 X API 权限）
+- `--type people`：搜索用户，而不是帖子
+
 这是更实用的“看热点帖子”方法：
 
 ```fish
-xrun search 'AI -is:retweet lang:zh' -n 20
-xrun search 'OpenAI OR Claude OR Gemini -is:retweet' -n 20
-xrun search '#AI lang:en -is:retweet' -n 20
+xrun search 'AI -is:retweet lang:zh' --sort top -n 20
+xrun search 'OpenAI OR Claude OR Gemini -is:retweet' --sort top -n 20
+xrun search '#AI lang:en -is:retweet' --sort top -n 20
+xrun search 'AI -is:retweet lang:zh' --sort top --scope all -n 20
 ```
 
 ### 方式 3：看指定用户最近帖子
 
 ```fish
-xrun search 'from:elonmusk -is:retweet' -n 20
-xrun search 'from:XDevelopers -is:retweet' -n 20
+xrun search 'from:elonmusk -is:retweet' --sort latest -n 20
+xrun search 'from:XDevelopers -is:retweet' --sort latest -n 20
 ```
 
 ### 方式 4：看某条帖子的回复
@@ -159,8 +171,16 @@ xrun search 'conversation_id:1234567890' -n 20
 ### 搜索帖子
 
 ```fish
-xrun search golang -n 20
-xrun search 'AI agent' -n 20
+xrun search golang --sort latest -n 20
+xrun search 'AI agent' --sort top -n 20
+xrun search 'AI agent' --sort top --scope all -n 20
+```
+
+### 搜索用户
+
+```fish
+xrun search 'AI agent' --type people -n 20
+xrun search 'openai' --type people -n 20
 ```
 
 ### 看私信事件

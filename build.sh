@@ -134,12 +134,8 @@ pointer = json.load(sys.stdin)
 path = pointer["__file_transport"]
 with open(path, "r", encoding="utf-8") as f:
     payload = json.load(f)
-assert payload["result"]["success"] is True
-output_file = payload["result"]["data"]["output_file"]
-with open(output_file, "r", encoding="utf-8") as f:
-    output_payload = json.load(f)
-assert output_payload["command_success"] is True
-assert "xurl " in output_payload["stdout"]
+assert payload["command_success"] is True
+assert "xurl " in payload["stdout"]
 os.remove(path)
 os.remove("dist/test-oauth2-token.json")
 ' 2>/dev/null; then

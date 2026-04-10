@@ -55,9 +55,7 @@ function xrun
         '{jsonrpc:"2.0",method:"invoke",params:{tool:"run_xurl",arguments:{args:$args,cwd:$cwd},context:{credentials:{X_OAUTH2_TOKEN_FILE:$token_file,X_BEARER_TOKEN:$bearer}}},id:1}')
 
     set -l resp_file (printf '%s\n' $req | $BINARY | jq -r '.__file_transport')
-    set -l out_file (cat $resp_file | jq -r '.result.data.output_file')
-
-    cat $out_file | jq .
+    cat $resp_file | jq .
 end
 
 function xrun_file
@@ -70,7 +68,7 @@ function xrun_file
         '{jsonrpc:"2.0",method:"invoke",params:{tool:"run_xurl",arguments:{args:$args,cwd:$cwd},context:{credentials:{X_OAUTH2_TOKEN_FILE:$token_file,X_BEARER_TOKEN:$bearer}}},id:1}')
 
     set -l resp_file (printf '%s\n' $req | $BINARY | jq -r '.__file_transport')
-    cat $resp_file | jq -r '.result.data.output_file'
+    echo $resp_file
 end
 
 function xlast
@@ -251,3 +249,47 @@ xrun /2/tweets/search/stream
 ```fish
 rm -rf $X_CWD
 ```
+
+## 10. 验证二进制直接输出
+
+如果你不通过 `xrun` 辅助函数，而是直接把一条 `invoke` 请求喂给二进制，那么标准输出 `stdout` 返回的是一个指向最终结果文件的 JSON 对象，其中会明确包含 `__file_transport` 字段。
+
+你可以直接执行：
+
+```fish
+printf '%s\n' (jq -nc \
+  --arg cwd "$X_CWD" \
+  --arg token_file "$X_TOKEN_FILE" \
+  --arg bearer "$X_BEARER_TOKEN" \
+  '{jsonrpc:"2.0",method:"invoke",params:{tool:"run_xurl",arguments:{args:["version"],cwd:$cwd},context:{credentials:{X_OAUTH2_TOKEN_FILE:$token_file,X_BEARER_TOKEN:$bearer}}},id:1}') | $BINARY
+```
+
+预期的 `stdout` 形态类似这样：
+
+```json
+{"jsonrpc":"2.0","id":1,"__file_transport":"/var/folders/.../T/executa-resp-1744185600000000000.json"}
+```
+
+这里要注意：
+
+- `__file_transport` 直接指向最终命令输出文件
+- 这个文件本身就是 `xurl-output-*.json`
+- 读取它即可拿到完整执行结果
+
+如果你还想继续手动验证，可以这样展开：
+
+```fish
+set -l resp_file (printf '%s\n' (jq -nc \
+  --arg cwd "$X_CWD" \
+  --arg token_file "$X_TOKEN_FILE" \
+  --arg bearer "$X_BEARER_TOKEN" \
+  '{jsonrpc:"2.0",method:"invoke",params:{tool:"run_xurl",arguments:{args:["version"],cwd:$cwd},context:{credentials:{X_OAUTH2_TOKEN_FILE:$token_file,X_BEARER_TOKEN:$bearer}}},id:1}') | $BINARY | jq -r '.__file_transport')
+
+cat $resp_file | jq .
+```
+
+补充说明：
+
+- `describe` 和 `health` 不走 `__file_transport`
+- 只有 `invoke` 会统一走 `__file_transport`
+- 这正是为了避免命令结果过大时直接塞进 stdout

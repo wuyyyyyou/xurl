@@ -130,6 +130,24 @@ func TestResolveAuthSelectionSkipsAuthForVersion(t *testing.T) {
 	}
 }
 
+func TestDirectFileTransportPath(t *testing.T) {
+	t.Parallel()
+
+	resp := rpcResponse{
+		Result: map[string]any{
+			directFilePathKey: "/tmp/xurl-output.json",
+		},
+	}
+
+	path, ok := directFileTransportPath(resp)
+	if !ok {
+		t.Fatal("expected direct file transport path")
+	}
+	if path != "/tmp/xurl-output.json" {
+		t.Fatalf("unexpected path: %q", path)
+	}
+}
+
 func containsAll(input string, parts ...string) bool {
 	for _, part := range parts {
 		if !strings.Contains(input, part) {

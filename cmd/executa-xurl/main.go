@@ -35,6 +35,7 @@ const (
 	authModeNone         = "none"
 	authModeUser         = "user"
 	authModeApp          = "app"
+	directFilePathKey    = "__direct_file_transport_path"
 	executaName          = "xurl-executa"
 )
 
@@ -43,7 +44,7 @@ var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
 var manifest = map[string]any{
 	"name":         executaName,
 	"display_name": executaName,
-	"version":      version.Version,
+	"version":      "1.0.0",
 	"description":  "Run xurl commands from ANNA with a user OAuth2 token file and optional app-only bearer token.",
 	"author":       "xdevplatform + ANNA",
 	"credentials": []map[string]any{
@@ -245,7 +246,7 @@ func handleInvoke(req rpcRequest) rpcResponse {
 		return invalidParamsResponse(req.ID, err.Error())
 	}
 
-	outputPath, result, err := runXURLCommand(args, cwd, authSelection)
+	outputPath, _, err := runXURLCommand(args, cwd, authSelection)
 	if err != nil {
 		return rpcResponse{
 			JSONRPC: "2.0",
@@ -264,15 +265,7 @@ func handleInvoke(req rpcRequest) rpcResponse {
 		JSONRPC: "2.0",
 		ID:      req.ID,
 		Result: map[string]any{
-			"success": true,
-			"tool":    toolName,
-			"data": map[string]any{
-				"output_file":     outputPath,
-				"command_success": result.CommandSuccess,
-				"exit_code":       result.ExitCode,
-				"cwd":             cwd,
-				"args":            args,
-			},
+			directFilePathKey: outputPath,
 		},
 	}
 }
@@ -784,6 +777,11 @@ func sendResponse(resp rpcResponse, useFileTransport bool) {
 		return
 	}
 
+	if directPath, ok := directFileTransportPath(resp); ok {
+		writeFileTransportPointer(resp.ID, directPath)
+		return
+	}
+
 	tmpPath := filepath.Join(os.TempDir(), fmt.Sprintf("executa-resp-%d.json", time.Now().UnixNano()))
 	if err := writeJSONFile(tmpPath, resp); err != nil {
 		fallback := rpcResponse{
@@ -801,10 +799,28 @@ func sendResponse(resp rpcResponse, useFileTransport bool) {
 		return
 	}
 
+	writeFileTransportPointer(resp.ID, tmpPath)
+}
+
+func directFileTransportPath(resp rpcResponse) (string, bool) {
+	resultMap, ok := resp.Result.(map[string]any)
+	if !ok {
+		return "", false
+	}
+
+	path, ok := resultMap[directFilePathKey].(string)
+	if !ok || strings.TrimSpace(path) == "" {
+		return "", false
+	}
+
+	return path, true
+}
+
+func writeFileTransportPointer(id any, path string) {
 	pointer := fileTransportPointer{
 		JSONRPC:       "2.0",
-		ID:            resp.ID,
-		FileTransport: tmpPath,
+		ID:            id,
+		FileTransport: path,
 	}
 	payload, err := json.Marshal(pointer)
 	if err != nil {

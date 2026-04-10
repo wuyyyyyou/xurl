@@ -15,12 +15,13 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/oauth2"
+
 	"github.com/xdevplatform/xurl/api"
 	"github.com/xdevplatform/xurl/auth"
 	"github.com/xdevplatform/xurl/cli"
 	"github.com/xdevplatform/xurl/config"
 	"github.com/xdevplatform/xurl/version"
-	"golang.org/x/oauth2"
 )
 
 const (
@@ -34,13 +35,14 @@ const (
 	authModeNone         = "none"
 	authModeUser         = "user"
 	authModeApp          = "app"
+	executaName          = "xurl-executa"
 )
 
 var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
 
 var manifest = map[string]any{
-	"name":         "xurl-executa",
-	"display_name": "xurl Executa",
+	"name":         executaName,
+	"display_name": executaName,
 	"version":      version.Version,
 	"description":  "Run xurl commands from ANNA with a user OAuth2 token file and optional app-only bearer token.",
 	"author":       "xdevplatform + ANNA",
@@ -49,14 +51,14 @@ var manifest = map[string]any{
 			"name":         tokenFileCredential,
 			"display_name": "X OAuth2 Token File",
 			"description":  "Path to a JSON file with Client ID, Client Secret, Refresh Token, and optional Access Token.",
-			"required":     false,
+			"required":     true,
 			"sensitive":    false,
 		},
 		{
 			"name":         bearerCredentialName,
 			"display_name": "X App-Only Bearer Token",
 			"description":  "App-only bearer token. Used automatically for search --scope all and other app-only search endpoints.",
-			"required":     false,
+			"required":     true,
 			"sensitive":    true,
 		},
 	},

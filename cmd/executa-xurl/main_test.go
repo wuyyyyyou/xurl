@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadOAuth2TokenFileRequiresFields(t *testing.T) {
@@ -145,6 +146,25 @@ func TestDirectFileTransportPath(t *testing.T) {
 	}
 	if path != "/tmp/xurl-output.json" {
 		t.Fatalf("unexpected path: %q", path)
+	}
+}
+
+func TestExpiredOAuth2TokenAlwaysReturnsExpiredSeed(t *testing.T) {
+	t.Parallel()
+
+	token := expiredOAuth2Token(oauth2TokenFile{
+		AccessToken:  "access-token",
+		RefreshToken: "refresh-token",
+	})
+
+	if token.AccessToken != "access-token" {
+		t.Fatalf("unexpected access token: %q", token.AccessToken)
+	}
+	if token.RefreshToken != "refresh-token" {
+		t.Fatalf("unexpected refresh token: %q", token.RefreshToken)
+	}
+	if !token.Expiry.Before(time.Now()) {
+		t.Fatalf("expected expired token seed, got expiry %v", token.Expiry)
 	}
 }
 

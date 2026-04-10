@@ -525,12 +525,19 @@ func executeUserXURLCommand(args []string, cwd string, tokenFilePath string) (co
 		return result, nil
 	}
 
-	return executeXURLCommand(
+	retriedResult, retryErr := executeXURLCommand(
 		args,
 		cwd,
 		map[string]string{userTokenEnvKey: refreshedTokenFile.AccessToken},
 		[]string{refreshedTokenFile.AccessToken, refreshedTokenFile.RefreshToken, refreshedTokenFile.ClientSecret},
 	)
+	if retryErr != nil {
+		return commandResult{}, retryErr
+	}
+	if !retriedResult.CommandSuccess && shouldRefreshUserToken(retriedResult) {
+		retriedResult.Stderr = appendDiagnostic(retriedResult.Stderr, "plugin refreshed the OAuth2 access token and retried once, but the X API still returned an authorization error")
+	}
+	return retriedResult, nil
 }
 
 func executeXURLCommand(args []string, cwd string, envVars map[string]string, secrets []string) (commandResult, error) {
@@ -668,10 +675,9 @@ func refreshOAuth2TokenFile(path string, tokenFile oauth2TokenFile) (oauth2Token
 		},
 	}
 
-	tokenSource := oauthCfg.TokenSource(context.Background(), &oauth2.Token{
-		AccessToken:  tokenFile.AccessToken,
-		RefreshToken: tokenFile.RefreshToken,
-	})
+	// Force a refresh-token exchange. The token file does not persist expiry
+	// metadata, so reusing the current access token here can prevent refresh.
+	tokenSource := oauthCfg.TokenSource(context.Background(), expiredOAuth2Token(tokenFile))
 
 	refreshedToken, err := tokenSource.Token()
 	if err != nil {
@@ -691,6 +697,14 @@ func refreshOAuth2TokenFile(path string, tokenFile oauth2TokenFile) (oauth2Token
 	}
 
 	return tokenFile, nil
+}
+
+func expiredOAuth2Token(tokenFile oauth2TokenFile) *oauth2.Token {
+	return &oauth2.Token{
+		AccessToken:  tokenFile.AccessToken,
+		RefreshToken: tokenFile.RefreshToken,
+		Expiry:       time.Now().Add(-1 * time.Hour),
+	}
 }
 
 func persistOAuth2TokenFile(path string, tokenFile oauth2TokenFile) error {

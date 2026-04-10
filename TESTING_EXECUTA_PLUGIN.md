@@ -72,7 +72,7 @@ function xrun_file
 end
 
 function xlast
-    set -l latest (ls -t $X_CWD/xurl-output-*.json 2>/dev/null | head -n 1)
+    set -l latest (ls -t $X_CWD/executa-response-*.json 2>/dev/null | head -n 1)
     if test -n "$latest"
         cat $latest | jq .
     else
@@ -115,14 +115,14 @@ cat $X_TOKEN_FILE | jq .
 
 ## 5. 查看输出文件路径
 
-如果你想拿到原始结果文件路径，而不是直接 `jq` 格式化输出：
+如果你想拿到原始协议响应文件路径，而不是直接 `jq` 格式化输出：
 
 ```fish
 xrun_file version
 xrun_file /2/users/me
 ```
 
-查看最近一次生成的结果文件：
+查看最近一次生成的协议响应文件：
 
 ```fish
 xlast
@@ -252,7 +252,7 @@ rm -rf $X_CWD
 
 ## 10. 验证二进制直接输出
 
-如果你不通过 `xrun` 辅助函数，而是直接把一条 `invoke` 请求喂给二进制，那么标准输出 `stdout` 返回的是一个指向最终结果文件的 JSON 对象，其中会明确包含 `__file_transport` 字段。
+如果你不通过 `xrun` 辅助函数，而是直接把一条 `invoke` 请求喂给二进制，那么标准输出 `stdout` 返回的是一个指向协议响应文件的 JSON 对象，其中会明确包含 `__file_transport` 字段。
 
 你可以直接执行：
 
@@ -267,14 +267,15 @@ printf '%s\n' (jq -nc \
 预期的 `stdout` 形态类似这样：
 
 ```json
-{"jsonrpc":"2.0","id":1,"__file_transport":"/var/folders/.../T/executa-resp-1744185600000000000.json"}
+{"jsonrpc":"2.0","id":1,"__file_transport":"/tmp/xurl-plugin-test/executa-response-1744185600000000000.json"}
 ```
 
 这里要注意：
 
-- `__file_transport` 直接指向最终命令输出文件
-- 这个文件本身就是 `xurl-output-*.json`
-- 读取它即可拿到完整执行结果
+- `__file_transport` 指向的是协议响应文件
+- 这个文件内容本身就是完整 JSON-RPC 响应
+- 成功时文件里是 `result`
+- 失败时文件里是 `error`
 
 如果你还想继续手动验证，可以这样展开：
 
@@ -293,3 +294,57 @@ cat $resp_file | jq .
 - `describe` 和 `health` 不走 `__file_transport`
 - 只有 `invoke` 会统一走 `__file_transport`
 - 这正是为了避免命令结果过大时直接塞进 stdout
+
+成功时，响应文件内容类似：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "success": true,
+    "tool": "run_xurl",
+    "data": {
+      "command": "version",
+      "args": [
+        "version"
+      ],
+      "cwd": "/tmp/xurl-plugin-test",
+      "executed_at": "2026-04-10T14:00:56Z",
+      "finished_at": "2026-04-10T14:00:56Z",
+      "duration_ms": 20,
+      "exit_code": 0,
+      "command_success": true,
+      "stdout": "xurl v1.0.4\n",
+      "stderr": ""
+    }
+  }
+}
+```
+
+失败时，响应文件内容类似：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "error": {
+    "code": -32001,
+    "message": "xurl command failed",
+    "data": {
+      "command": "--version",
+      "args": [
+        "--version"
+      ],
+      "cwd": "/tmp/xurl-plugin-test",
+      "executed_at": "2026-04-10T14:00:15Z",
+      "finished_at": "2026-04-10T14:00:15Z",
+      "duration_ms": 25,
+      "exit_code": 1,
+      "command_success": false,
+      "stdout": "",
+      "stderr": "Error: unknown flag: --version\n..."
+    }
+  }
+}
+```

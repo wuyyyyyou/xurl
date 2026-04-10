@@ -35,7 +35,6 @@ const (
 	authModeNone         = "none"
 	authModeUser         = "user"
 	authModeApp          = "app"
-	directFilePathKey    = "__direct_file_transport_path"
 	executaName          = "xurl-executa"
 )
 
@@ -98,10 +97,11 @@ type rpcRequest struct {
 }
 
 type rpcResponse struct {
-	JSONRPC string  `json:"jsonrpc"`
-	ID      any     `json:"id"`
-	Result  any     `json:"result,omitempty"`
-	Error   *rpcErr `json:"error,omitempty"`
+	JSONRPC  string  `json:"jsonrpc"`
+	ID       any     `json:"id"`
+	Result   any     `json:"result,omitempty"`
+	Error    *rpcErr `json:"error,omitempty"`
+	FilePath string  `json:"-"`
 }
 
 type rpcErr struct {
@@ -210,16 +210,17 @@ func handleRequest(req rpcRequest) rpcResponse {
 
 func handleInvoke(req rpcRequest) rpcResponse {
 	toolName, _ := req.Params["tool"].(string)
+	response := rpcResponse{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+	}
 	if toolName != "run_xurl" {
-		return rpcResponse{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Error: &rpcErr{
-				Code:    -32601,
-				Message: fmt.Sprintf("Unknown tool: %s", toolName),
-				Data:    map[string]any{"available_tools": []string{"run_xurl"}},
-			},
+		response.Error = &rpcErr{
+			Code:    -32601,
+			Message: fmt.Sprintf("Unknown tool: %s", toolName),
+			Data:    map[string]any{"available_tools": []string{"run_xurl"}},
 		}
+		return response
 	}
 
 	arguments, _ := req.Params["arguments"].(map[string]any)
@@ -227,58 +228,76 @@ func handleInvoke(req rpcRequest) rpcResponse {
 		arguments = map[string]any{}
 	}
 
+	cwd, cwdErr := resolveCWD(arguments)
+	if cwdErr == nil {
+		response.FilePath = buildInvokeResponsePath(cwd)
+	}
+
 	args, err := getArgs(arguments)
 	if err != nil {
-		return invalidParamsResponse(req.ID, err.Error())
+		response.Error = &rpcErr{
+			Code:    -32602,
+			Message: err.Error(),
+		}
+		return response
 	}
 
 	if err := validateArgs(args); err != nil {
-		return invalidParamsResponse(req.ID, err.Error())
+		response.Error = &rpcErr{
+			Code:    -32602,
+			Message: err.Error(),
+		}
+		return response
 	}
 
-	cwd, err := resolveCWD(arguments)
-	if err != nil {
-		return invalidParamsResponse(req.ID, err.Error())
+	if cwdErr != nil {
+		response.Error = &rpcErr{
+			Code:    -32602,
+			Message: cwdErr.Error(),
+		}
+		return response
 	}
 
 	authSelection, err := resolveAuthSelection(args, req.Params)
 	if err != nil {
-		return invalidParamsResponse(req.ID, err.Error())
+		response.Error = &rpcErr{
+			Code:    -32602,
+			Message: err.Error(),
+		}
+		return response
 	}
 
-	outputPath, _, err := runXURLCommand(args, cwd, authSelection)
+	result, err := runXURLCommand(args, cwd, authSelection)
 	if err != nil {
-		return rpcResponse{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Error: &rpcErr{
-				Code:    -32603,
-				Message: "Failed to execute xurl command",
-				Data: map[string]any{
-					"error": err.Error(),
-				},
+		response.Error = &rpcErr{
+			Code:    -32603,
+			Message: "Failed to execute xurl command",
+			Data: map[string]any{
+				"error": err.Error(),
 			},
 		}
+		return response
 	}
 
-	return rpcResponse{
-		JSONRPC: "2.0",
-		ID:      req.ID,
-		Result: map[string]any{
-			directFilePathKey: outputPath,
-		},
+	if !result.CommandSuccess {
+		response.Error = &rpcErr{
+			Code:    -32001,
+			Message: "xurl command failed",
+			Data:    result,
+		}
+		return response
 	}
+
+	response.Result = map[string]any{
+		"success": true,
+		"tool":    toolName,
+		"data":    result,
+	}
+	return response
 }
 
-func invalidParamsResponse(id any, message string) rpcResponse {
-	return rpcResponse{
-		JSONRPC: "2.0",
-		ID:      id,
-		Error: &rpcErr{
-			Code:    -32602,
-			Message: message,
-		},
-	}
+func buildInvokeResponsePath(cwd string) string {
+	return filepath.Join(cwd, fmt.Sprintf("executa-response-%d.json", time.Now().UTC().UnixNano()))
 }
 
 func getArgs(arguments map[string]any) ([]string, error) {
@@ -464,7 +483,7 @@ func requiresAuth(args []string) bool {
 	return true
 }
 
-func runXURLCommand(args []string, cwd string, auth authSelection) (string, commandResult, error) {
+func runXURLCommand(args []string, cwd string, auth authSelection) (commandResult, error) {
 	var (
 		result commandResult
 		err    error
@@ -481,15 +500,10 @@ func runXURLCommand(args []string, cwd string, auth authSelection) (string, comm
 		err = fmt.Errorf("unsupported auth mode: %s", auth.mode)
 	}
 	if err != nil {
-		return "", commandResult{}, err
+		return commandResult{}, err
 	}
 
-	outputPath := filepath.Join(cwd, fmt.Sprintf("xurl-output-%d.json", time.Now().UTC().UnixNano()))
-	if err := writeJSONFile(outputPath, result); err != nil {
-		return "", commandResult{}, fmt.Errorf("failed to write output file: %w", err)
-	}
-
-	return outputPath, result, nil
+	return result, nil
 }
 
 func executeUserXURLCommand(args []string, cwd string, tokenFilePath string) (commandResult, error) {
@@ -791,13 +805,12 @@ func sendResponse(resp rpcResponse, useFileTransport bool) {
 		return
 	}
 
-	if directPath, ok := directFileTransportPath(resp); ok {
-		writeFileTransportPointer(resp.ID, directPath)
-		return
+	targetPath := strings.TrimSpace(resp.FilePath)
+	if targetPath == "" {
+		targetPath = filepath.Join(os.TempDir(), fmt.Sprintf("executa-resp-%d.json", time.Now().UnixNano()))
 	}
 
-	tmpPath := filepath.Join(os.TempDir(), fmt.Sprintf("executa-resp-%d.json", time.Now().UnixNano()))
-	if err := writeJSONFile(tmpPath, resp); err != nil {
+	if err := writeJSONFile(targetPath, resp); err != nil {
 		fallback := rpcResponse{
 			JSONRPC: "2.0",
 			ID:      resp.ID,
@@ -813,21 +826,7 @@ func sendResponse(resp rpcResponse, useFileTransport bool) {
 		return
 	}
 
-	writeFileTransportPointer(resp.ID, tmpPath)
-}
-
-func directFileTransportPath(resp rpcResponse) (string, bool) {
-	resultMap, ok := resp.Result.(map[string]any)
-	if !ok {
-		return "", false
-	}
-
-	path, ok := resultMap[directFilePathKey].(string)
-	if !ok || strings.TrimSpace(path) == "" {
-		return "", false
-	}
-
-	return path, true
+	writeFileTransportPointer(resp.ID, targetPath)
 }
 
 func writeFileTransportPointer(id any, path string) {

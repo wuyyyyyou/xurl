@@ -131,21 +131,15 @@ func TestResolveAuthSelectionSkipsAuthForVersion(t *testing.T) {
 	}
 }
 
-func TestDirectFileTransportPath(t *testing.T) {
+func TestBuildInvokeResponsePath(t *testing.T) {
 	t.Parallel()
 
-	resp := rpcResponse{
-		Result: map[string]any{
-			directFilePathKey: "/tmp/xurl-output.json",
-		},
+	path := buildInvokeResponsePath("/tmp/xurl-plugin-test")
+	if !strings.HasPrefix(path, "/tmp/xurl-plugin-test/executa-response-") {
+		t.Fatalf("unexpected response path: %q", path)
 	}
-
-	path, ok := directFileTransportPath(resp)
-	if !ok {
-		t.Fatal("expected direct file transport path")
-	}
-	if path != "/tmp/xurl-output.json" {
-		t.Fatalf("unexpected path: %q", path)
+	if !strings.HasSuffix(path, ".json") {
+		t.Fatalf("unexpected response path suffix: %q", path)
 	}
 }
 

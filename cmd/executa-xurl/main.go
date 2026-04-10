@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,14 +20,20 @@ import (
 	"github.com/xdevplatform/xurl/cli"
 	"github.com/xdevplatform/xurl/config"
 	"github.com/xdevplatform/xurl/version"
+	"golang.org/x/oauth2"
 )
 
 const (
 	internalCLICommand   = "__xurl_cli"
-	userCredentialName   = "X_OAUTH2_ACCESS_TOKEN"
+	tokenFileCredential  = "X_OAUTH2_TOKEN_FILE"
 	bearerCredentialName = "X_BEARER_TOKEN"
 	userTokenEnvKey      = "XURL_EXECUTA_OAUTH2_ACCESS_TOKEN"
 	bearerTokenEnvKey    = "XURL_EXECUTA_BEARER_TOKEN"
+	defaultFilePerms     = 0o600
+	tempFileSuffix       = ".tmp"
+	authModeNone         = "none"
+	authModeUser         = "user"
+	authModeApp          = "app"
 )
 
 var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
@@ -35,15 +42,15 @@ var manifest = map[string]any{
 	"name":         "xurl-executa",
 	"display_name": "xurl Executa",
 	"version":      version.Version,
-	"description":  "Run xurl commands from ANNA with an injected OAuth 2.0 access token.",
+	"description":  "Run xurl commands from ANNA with a user OAuth2 token file and optional app-only bearer token.",
 	"author":       "xdevplatform + ANNA",
 	"credentials": []map[string]any{
 		{
-			"name":         userCredentialName,
-			"display_name": "X OAuth2 Access Token",
-			"description":  "OAuth 2.0 user-context access token. Used for timeline, posting, reply, DM, and most user operations.",
+			"name":         tokenFileCredential,
+			"display_name": "X OAuth2 Token File",
+			"description":  "Path to a JSON file with Client ID, Client Secret, Refresh Token, and optional Access Token.",
 			"required":     false,
-			"sensitive":    true,
+			"sensitive":    false,
 		},
 		{
 			"name":         bearerCredentialName,
@@ -345,21 +352,29 @@ func resolveCWD(arguments map[string]any) (string, error) {
 }
 
 type authSelection struct {
-	envKey string
-	token  string
+	mode          string
+	token         string
+	tokenFilePath string
 }
 
-func resolveUserToken(params map[string]any) string {
+type oauth2TokenFile struct {
+	ClientID     string `json:"Client ID"`
+	ClientSecret string `json:"Client Secret"`
+	AccessToken  string `json:"Access Token,omitempty"`
+	RefreshToken string `json:"Refresh Token"`
+}
+
+func resolveTokenFilePath(params map[string]any) string {
 	context, _ := params["context"].(map[string]any)
 	if context != nil {
 		credentials, _ := context["credentials"].(map[string]any)
 		if credentials != nil {
-			if token, ok := credentials[userCredentialName].(string); ok {
-				return strings.TrimSpace(token)
+			if tokenFilePath, ok := credentials[tokenFileCredential].(string); ok {
+				return strings.TrimSpace(tokenFilePath)
 			}
 		}
 	}
-	return strings.TrimSpace(os.Getenv(userCredentialName))
+	return strings.TrimSpace(os.Getenv(tokenFileCredential))
 }
 
 func resolveBearerToken(params map[string]any) string {
@@ -376,19 +391,23 @@ func resolveBearerToken(params map[string]any) string {
 }
 
 func resolveAuthSelection(args []string, params map[string]any) (authSelection, error) {
+	if !requiresAuth(args) {
+		return authSelection{mode: authModeNone}, nil
+	}
+
 	if requiresAppOnlyAuth(args) {
 		token := resolveBearerToken(params)
 		if token == "" {
 			return authSelection{}, fmt.Errorf("missing credential %q for app-only search", bearerCredentialName)
 		}
-		return authSelection{envKey: bearerTokenEnvKey, token: token}, nil
+		return authSelection{mode: authModeApp, token: token}, nil
 	}
 
-	token := resolveUserToken(params)
-	if token == "" {
-		return authSelection{}, fmt.Errorf("missing credential %q", userCredentialName)
+	tokenFilePath := resolveTokenFilePath(params)
+	if tokenFilePath == "" {
+		return authSelection{}, fmt.Errorf("missing credential %q", tokenFileCredential)
 	}
-	return authSelection{envKey: userTokenEnvKey, token: token}, nil
+	return authSelection{mode: authModeUser, tokenFilePath: tokenFilePath}, nil
 }
 
 func requiresAppOnlyAuth(args []string) bool {
@@ -408,8 +427,22 @@ func requiresAppOnlyAuth(args []string) bool {
 		}
 	}
 
+	if args[0] == "trends" {
+		if len(args) > 1 {
+			target := strings.ToLower(args[1])
+			return target != "personal" && target != "personalized"
+		}
+		return true
+	}
+
+	if args[0] == "news" {
+		return true
+	}
+
 	for _, arg := range args {
-		if strings.Contains(arg, "/2/tweets/search/all") {
+		if strings.Contains(arg, "/2/tweets/search/all") ||
+			strings.Contains(arg, "/2/trends/by/woeid/") ||
+			strings.Contains(arg, "/2/news/search") {
 			return true
 		}
 	}
@@ -417,16 +450,107 @@ func requiresAppOnlyAuth(args []string) bool {
 	return false
 }
 
+func requiresAuth(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+
+	switch args[0] {
+	case "version", "help", "completion":
+		return false
+	}
+
+	for _, arg := range args {
+		if arg == "--help" || arg == "-h" {
+			return false
+		}
+	}
+
+	return true
+}
+
 func runXURLCommand(args []string, cwd string, auth authSelection) (string, commandResult, error) {
+	var (
+		result commandResult
+		err    error
+	)
+
+	switch auth.mode {
+	case authModeNone:
+		result, err = executeXURLCommand(args, cwd, nil, nil)
+	case authModeApp:
+		result, err = executeXURLCommand(args, cwd, map[string]string{bearerTokenEnvKey: auth.token}, []string{auth.token})
+	case authModeUser:
+		result, err = executeUserXURLCommand(args, cwd, auth.tokenFilePath)
+	default:
+		err = fmt.Errorf("unsupported auth mode: %s", auth.mode)
+	}
+	if err != nil {
+		return "", commandResult{}, err
+	}
+
+	outputPath := filepath.Join(cwd, fmt.Sprintf("xurl-output-%d.json", time.Now().UTC().UnixNano()))
+	if err := writeJSONFile(outputPath, result); err != nil {
+		return "", commandResult{}, fmt.Errorf("failed to write output file: %w", err)
+	}
+
+	return outputPath, result, nil
+}
+
+func executeUserXURLCommand(args []string, cwd string, tokenFilePath string) (commandResult, error) {
+	tokenFile, err := loadOAuth2TokenFile(tokenFilePath)
+	if err != nil {
+		return commandResult{}, err
+	}
+
+	if tokenFile.AccessToken == "" {
+		tokenFile, err = refreshOAuth2TokenFile(tokenFilePath, tokenFile)
+		if err != nil {
+			return commandResult{}, fmt.Errorf("failed to refresh access token: %w", err)
+		}
+	}
+
+	result, err := executeXURLCommand(
+		args,
+		cwd,
+		map[string]string{userTokenEnvKey: tokenFile.AccessToken},
+		[]string{tokenFile.AccessToken, tokenFile.RefreshToken, tokenFile.ClientSecret},
+	)
+	if err != nil {
+		return commandResult{}, err
+	}
+
+	if !shouldRefreshUserToken(result) {
+		return result, nil
+	}
+
+	refreshedTokenFile, refreshErr := refreshOAuth2TokenFile(tokenFilePath, tokenFile)
+	if refreshErr != nil {
+		result.Stderr = appendDiagnostic(result.Stderr, fmt.Sprintf("plugin refresh attempt failed: %v", refreshErr))
+		return result, nil
+	}
+
+	return executeXURLCommand(
+		args,
+		cwd,
+		map[string]string{userTokenEnvKey: refreshedTokenFile.AccessToken},
+		[]string{refreshedTokenFile.AccessToken, refreshedTokenFile.RefreshToken, refreshedTokenFile.ClientSecret},
+	)
+}
+
+func executeXURLCommand(args []string, cwd string, envVars map[string]string, secrets []string) (commandResult, error) {
 	executable, err := os.Executable()
 	if err != nil {
-		return "", commandResult{}, fmt.Errorf("failed to resolve plugin executable: %w", err)
+		return commandResult{}, fmt.Errorf("failed to resolve plugin executable: %w", err)
 	}
 
 	cmdArgs := append([]string{internalCLICommand}, args...)
 	cmd := exec.Command(executable, cmdArgs...)
 	cmd.Dir = cwd
-	cmd.Env = append(os.Environ(), auth.envKey+"="+auth.token)
+	cmd.Env = append([]string{}, os.Environ()...)
+	for key, value := range envVars {
+		cmd.Env = append(cmd.Env, key+"="+value)
+	}
 
 	var stdoutBuf bytes.Buffer
 	var stderrBuf bytes.Buffer
@@ -447,8 +571,8 @@ func runXURLCommand(args []string, cwd string, auth authSelection) (string, comm
 		}
 	}
 
-	cleanStdout := redactSecret(stripANSI(stdoutBuf.String()), auth.token)
-	cleanStderr := redactSecret(stripANSI(stderrBuf.String()), auth.token)
+	cleanStdout := redactSecrets(stripANSI(stdoutBuf.String()), secrets...)
+	cleanStderr := redactSecrets(stripANSI(stderrBuf.String()), secrets...)
 
 	result := commandResult{
 		Command:        strings.Join(args, " "),
@@ -467,12 +591,7 @@ func runXURLCommand(args []string, cwd string, auth authSelection) (string, comm
 		result.ParsedJSON = parsed
 	}
 
-	outputPath := filepath.Join(cwd, fmt.Sprintf("xurl-output-%d.json", time.Now().UTC().UnixNano()))
-	if err := writeJSONFile(outputPath, result); err != nil {
-		return "", commandResult{}, fmt.Errorf("failed to write output file: %w", err)
-	}
-
-	return outputPath, result, nil
+	return result, nil
 }
 
 func parseJSON(input string) any {
@@ -492,11 +611,15 @@ func stripANSI(input string) string {
 	return ansiPattern.ReplaceAllString(input, "")
 }
 
-func redactSecret(input string, secret string) string {
-	if secret == "" {
-		return input
+func redactSecrets(input string, secrets ...string) string {
+	output := input
+	for _, secret := range secrets {
+		if secret == "" {
+			continue
+		}
+		output = strings.ReplaceAll(output, secret, "[REDACTED]")
 	}
-	return strings.ReplaceAll(input, secret, "[REDACTED]")
+	return output
 }
 
 func writeJSONFile(path string, value any) error {
@@ -505,6 +628,140 @@ func writeJSONFile(path string, value any) error {
 		return err
 	}
 	return os.WriteFile(path, append(data, '\n'), 0o644)
+}
+
+func loadOAuth2TokenFile(path string) (oauth2TokenFile, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return oauth2TokenFile{}, fmt.Errorf("failed to resolve token file path: %w", err)
+	}
+
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		return oauth2TokenFile{}, fmt.Errorf("failed to read token file %q: %w", absPath, err)
+	}
+
+	var tokenFile oauth2TokenFile
+	if err := json.Unmarshal(data, &tokenFile); err != nil {
+		return oauth2TokenFile{}, fmt.Errorf("failed to parse token file %q: %w", absPath, err)
+	}
+
+	tokenFile.ClientID = strings.TrimSpace(tokenFile.ClientID)
+	tokenFile.ClientSecret = strings.TrimSpace(tokenFile.ClientSecret)
+	tokenFile.AccessToken = strings.TrimSpace(tokenFile.AccessToken)
+	tokenFile.RefreshToken = strings.TrimSpace(tokenFile.RefreshToken)
+
+	switch {
+	case tokenFile.ClientID == "":
+		return oauth2TokenFile{}, fmt.Errorf("token file %q is missing required field %q", absPath, "Client ID")
+	case tokenFile.ClientSecret == "":
+		return oauth2TokenFile{}, fmt.Errorf("token file %q is missing required field %q", absPath, "Client Secret")
+	case tokenFile.RefreshToken == "":
+		return oauth2TokenFile{}, fmt.Errorf("token file %q is missing required field %q", absPath, "Refresh Token")
+	}
+
+	return tokenFile, nil
+}
+
+func refreshOAuth2TokenFile(path string, tokenFile oauth2TokenFile) (oauth2TokenFile, error) {
+	cfg := config.NewConfig()
+	oauthCfg := &oauth2.Config{
+		ClientID:     tokenFile.ClientID,
+		ClientSecret: tokenFile.ClientSecret,
+		Endpoint: oauth2.Endpoint{
+			TokenURL: cfg.TokenURL,
+		},
+	}
+
+	tokenSource := oauthCfg.TokenSource(context.Background(), &oauth2.Token{
+		AccessToken:  tokenFile.AccessToken,
+		RefreshToken: tokenFile.RefreshToken,
+	})
+
+	refreshedToken, err := tokenSource.Token()
+	if err != nil {
+		return oauth2TokenFile{}, fmt.Errorf("refresh token exchange failed: %w", err)
+	}
+	if strings.TrimSpace(refreshedToken.AccessToken) == "" {
+		return oauth2TokenFile{}, fmt.Errorf("refresh token exchange returned an empty access token")
+	}
+
+	tokenFile.AccessToken = strings.TrimSpace(refreshedToken.AccessToken)
+	if refreshedRefreshToken := strings.TrimSpace(refreshedToken.RefreshToken); refreshedRefreshToken != "" {
+		tokenFile.RefreshToken = refreshedRefreshToken
+	}
+
+	if err := persistOAuth2TokenFile(path, tokenFile); err != nil {
+		return oauth2TokenFile{}, err
+	}
+
+	return tokenFile, nil
+}
+
+func persistOAuth2TokenFile(path string, tokenFile oauth2TokenFile) error {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("failed to resolve token file path: %w", err)
+	}
+
+	data, err := json.MarshalIndent(tokenFile, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to serialize token file %q: %w", absPath, err)
+	}
+
+	tempPath := absPath + tempFileSuffix
+	if err := os.WriteFile(tempPath, append(data, '\n'), defaultFilePerms); err != nil {
+		return fmt.Errorf("failed to write token file %q: %w", tempPath, err)
+	}
+	if err := os.Rename(tempPath, absPath); err != nil {
+		return fmt.Errorf("failed to replace token file %q: %w", absPath, err)
+	}
+
+	return nil
+}
+
+func shouldRefreshUserToken(result commandResult) bool {
+	if result.CommandSuccess {
+		return false
+	}
+
+	if status, ok := extractStatusCode(result.ParsedJSON); ok && status == 401 {
+		return true
+	}
+
+	combined := strings.ToLower(result.Stdout + "\n" + result.Stderr)
+	return strings.Contains(combined, "expired token") ||
+		strings.Contains(combined, "invalid or expired") ||
+		strings.Contains(combined, "unauthorized")
+}
+
+func extractStatusCode(parsed any) (int, bool) {
+	payload, ok := parsed.(map[string]any)
+	if !ok {
+		return 0, false
+	}
+
+	switch value := payload["status"].(type) {
+	case float64:
+		return int(value), true
+	case int:
+		return value, true
+	case json.Number:
+		number, err := value.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return int(number), true
+	default:
+		return 0, false
+	}
+}
+
+func appendDiagnostic(input string, message string) string {
+	if strings.TrimSpace(input) == "" {
+		return message
+	}
+	return input + "\n" + message
 }
 
 func sendResponse(resp rpcResponse, useFileTransport bool) {

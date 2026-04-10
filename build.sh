@@ -118,7 +118,16 @@ assert payload["result"]["name"] == "xurl-executa"
         fi
 
         echo -e "  [invoke]..."
-        RESULT=$(printf '%s\n' '{"jsonrpc":"2.0","method":"invoke","params":{"tool":"run_xurl","arguments":{"args":["version"],"cwd":"./dist"},"context":{"credentials":{"X_OAUTH2_ACCESS_TOKEN":"dummy-token"}}},"id":2}' | "$BINARY" 2>/dev/null)
+        TOKEN_FILE="dist/test-oauth2-token.json"
+        cat > "$TOKEN_FILE" <<'EOF'
+{
+  "Client ID": "dummy-client-id",
+  "Client Secret": "dummy-client-secret",
+  "Access Token": "dummy-access-token",
+  "Refresh Token": "dummy-refresh-token"
+}
+EOF
+        RESULT=$(printf '%s\n' "{\"jsonrpc\":\"2.0\",\"method\":\"invoke\",\"params\":{\"tool\":\"run_xurl\",\"arguments\":{\"args\":[\"version\"],\"cwd\":\"./dist\"},\"context\":{\"credentials\":{\"X_OAUTH2_TOKEN_FILE\":\"$TOKEN_FILE\"}}},\"id\":2}" | "$BINARY" 2>/dev/null)
         if printf '%s' "$RESULT" | python3 -c '
 import json, os, sys
 pointer = json.load(sys.stdin)
@@ -132,6 +141,7 @@ with open(output_file, "r", encoding="utf-8") as f:
 assert output_payload["command_success"] is True
 assert "xurl " in output_payload["stdout"]
 os.remove(path)
+os.remove("dist/test-oauth2-token.json")
 ' 2>/dev/null; then
             echo -e "  ${GREEN}✅ invoke 通过${NC}"
         else

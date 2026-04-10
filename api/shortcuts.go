@@ -224,6 +224,41 @@ func SearchUsers(client Client, query string, maxResults int, opts RequestOption
 	return client.SendRequest(opts)
 }
 
+// GetTrendsByWOEID fetches trends for a WOEID.
+func GetTrendsByWOEID(client Client, woeid string, opts RequestOptions) (json.RawMessage, error) {
+	opts.Method = "GET"
+	opts.Endpoint = fmt.Sprintf("/2/trends/by/woeid/%s", woeid)
+	opts.Data = ""
+
+	return client.SendRequest(opts)
+}
+
+// GetPersonalizedTrends fetches personalized trends for the authenticated user.
+func GetPersonalizedTrends(client Client, opts RequestOptions) (json.RawMessage, error) {
+	opts.Method = "GET"
+	opts.Endpoint = "/2/users/personalized_trends"
+	opts.Data = ""
+
+	return client.SendRequest(opts)
+}
+
+// SearchNews searches news stories by query.
+func SearchNews(client Client, query string, maxResults int, opts RequestOptions) (json.RawMessage, error) {
+	q := url.QueryEscape(query)
+
+	if maxResults < 1 {
+		maxResults = 1
+	} else if maxResults > 100 {
+		maxResults = 100
+	}
+
+	opts.Method = "GET"
+	opts.Endpoint = fmt.Sprintf("/2/news/search?query=%s&max_results=%d", q, maxResults)
+	opts.Data = ""
+
+	return client.SendRequest(opts)
+}
+
 // GetMe fetches the authenticated user's profile.
 func GetMe(client Client, opts RequestOptions) (json.RawMessage, error) {
 	opts.Method = "GET"

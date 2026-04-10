@@ -12,14 +12,24 @@
 
 ## 2. 初始化测试环境
 
-把下面的 `YOUR_X_OAUTH2_ACCESS_TOKEN` 替换成你自己的 X OAuth 2.0 access token。
+把下面的占位值替换成你自己的 X OAuth 2.0 凭据。插件会从这个 JSON 文件读取并在刷新后回写 `Access Token`。
 
 ```fish
 set -x BINARY ./dist/xurl-executa
-set -x X_TOKEN YOUR_X_OAUTH2_ACCESS_TOKEN
 set -x X_BEARER_TOKEN YOUR_X_APP_ONLY_BEARER_TOKEN
 set -x X_CWD /tmp/xurl-plugin-test
+set -x X_TOKEN_FILE $X_CWD/x-oauth2-token.json
 mkdir -p $X_CWD
+
+jq -n \
+  --arg client_id YOUR_X_CLIENT_ID \
+  --arg client_secret YOUR_X_CLIENT_SECRET \
+  --arg refresh_token YOUR_X_REFRESH_TOKEN \
+  '{
+    "Client ID": $client_id,
+    "Client Secret": $client_secret,
+    "Refresh Token": $refresh_token
+  }' > $X_TOKEN_FILE
 ```
 
 ## 3. 定义辅助函数
@@ -40,9 +50,9 @@ function xrun
     set -l req (jq -nc \
         --argjson args "$args_json" \
         --arg cwd "$X_CWD" \
-        --arg token "$X_TOKEN" \
+        --arg token_file "$X_TOKEN_FILE" \
         --arg bearer "$X_BEARER_TOKEN" \
-        '{jsonrpc:"2.0",method:"invoke",params:{tool:"run_xurl",arguments:{args:$args,cwd:$cwd},context:{credentials:{X_OAUTH2_ACCESS_TOKEN:$token,X_BEARER_TOKEN:$bearer}}},id:1}')
+        '{jsonrpc:"2.0",method:"invoke",params:{tool:"run_xurl",arguments:{args:$args,cwd:$cwd},context:{credentials:{X_OAUTH2_TOKEN_FILE:$token_file,X_BEARER_TOKEN:$bearer}}},id:1}')
 
     set -l resp_file (printf '%s\n' $req | $BINARY | jq -r '.__file_transport')
     set -l out_file (cat $resp_file | jq -r '.result.data.output_file')
@@ -55,9 +65,9 @@ function xrun_file
     set -l req (jq -nc \
         --argjson args "$args_json" \
         --arg cwd "$X_CWD" \
-        --arg token "$X_TOKEN" \
+        --arg token_file "$X_TOKEN_FILE" \
         --arg bearer "$X_BEARER_TOKEN" \
-        '{jsonrpc:"2.0",method:"invoke",params:{tool:"run_xurl",arguments:{args:$args,cwd:$cwd},context:{credentials:{X_OAUTH2_ACCESS_TOKEN:$token,X_BEARER_TOKEN:$bearer}}},id:1}')
+        '{jsonrpc:"2.0",method:"invoke",params:{tool:"run_xurl",arguments:{args:$args,cwd:$cwd},context:{credentials:{X_OAUTH2_TOKEN_FILE:$token_file,X_BEARER_TOKEN:$bearer}}},id:1}')
 
     set -l resp_file (printf '%s\n' $req | $BINARY | jq -r '.__file_transport')
     cat $resp_file | jq -r '.result.data.output_file'
@@ -97,6 +107,12 @@ xrun version
 
 ```fish
 xrun /2/users/me
+```
+
+查看插件刷新后写回的 token 文件：
+
+```fish
+cat $X_TOKEN_FILE | jq .
 ```
 
 ## 5. 查看输出文件路径
@@ -181,6 +197,21 @@ xrun search 'AI agent' --sort top --scope all -n 20
 ```fish
 xrun search 'AI agent' --type people -n 20
 xrun search 'openai' --type people -n 20
+```
+
+### 看趋势
+
+```fish
+xrun trends worldwide
+xrun trends 23424977
+xrun trends personal
+```
+
+### 看新闻热点
+
+```fish
+xrun news AI
+xrun news 'OpenAI' -n 10
 ```
 
 ### 看私信事件

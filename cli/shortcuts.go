@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -114,6 +115,8 @@ func CreateShortcutCommands(rootCmd *cobra.Command, a *auth.Auth) {
 		deleteCmd(a),
 		readCmd(a),
 		searchCmd(a),
+		trendsCmd(a),
+		newsCmd(a),
 		whoamiCmd(a),
 		userCmd(a),
 		timelineCmd(a),
@@ -297,6 +300,57 @@ Examples:
 	cmd.Flags().StringVar(&searchType, "type", string(api.SearchTypePosts), "Search type: posts or people")
 	cmd.Flags().StringVar(&sortOrder, "sort", string(api.SearchSortLatest), "Post search sort: latest or top")
 	cmd.Flags().StringVar(&searchScope, "scope", string(api.SearchScopeRecent), "Post search scope: recent or all")
+	addCommonFlags(cmd)
+	return cmd
+}
+
+func trendsCmd(a *auth.Auth) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "trends TARGET",
+		Short: "Get trends by region or personalized trends",
+		Long: `Get trends by region or personalized trends.
+
+Examples:
+  xurl trends worldwide
+  xurl trends personal
+  xurl trends 23424977`,
+		Args: cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			client := newClient(a)
+			opts := baseOpts(cmd)
+
+			switch strings.ToLower(args[0]) {
+			case "worldwide":
+				printResult(api.GetTrendsByWOEID(client, "1", opts))
+			case "personal", "personalized":
+				printResult(api.GetPersonalizedTrends(client, opts))
+			default:
+				printResult(api.GetTrendsByWOEID(client, args[0], opts))
+			}
+		},
+	}
+	addCommonFlags(cmd)
+	return cmd
+}
+
+func newsCmd(a *auth.Auth) *cobra.Command {
+	var maxResults int
+	cmd := &cobra.Command{
+		Use:   `news "QUERY"`,
+		Short: "Search news stories",
+		Long: `Search news stories by query.
+
+Examples:
+  xurl news "AI"
+  xurl news "OpenAI" -n 10`,
+		Args: cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			client := newClient(a)
+			opts := baseOpts(cmd)
+			printResult(api.SearchNews(client, args[0], maxResults, opts))
+		},
+	}
+	cmd.Flags().IntVarP(&maxResults, "max-results", "n", 10, "Number of results (1-100)")
 	addCommonFlags(cmd)
 	return cmd
 }

@@ -1,9 +1,14 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing git tag to release, for example v1.2.3
+        required: true
+      release_name:
+        description: Optional release title override
+        required: false
 
 permissions:
   contents: write
@@ -14,12 +19,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version-file: go.mod
 
       - name: Run tests
         run: go test ./...
@@ -41,16 +47,19 @@ jobs:
 
       - name: Update npm package version
         run: |
-          VERSION=${GITHUB_REF_NAME#v}
+          VERSION=${INPUT_TAG#v}
           cd npm
           npm version "$VERSION" --no-git-tag-version
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
 
       - name: Unpublish npm version if it exists
         continue-on-error: true
         run: |
-          VERSION=${GITHUB_REF_NAME#v}
+          VERSION=${INPUT_TAG#v}
           npm unpublish "@xdevplatform/xurl@${VERSION}" --registry=https://registry.npmjs.org
         env:
+          INPUT_TAG: ${{ inputs.tag }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish to npm
@@ -59,3 +68,10 @@ jobs:
           npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Update release title
+        if: ${{ inputs.release_name != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release edit "${{ inputs.tag }}" --repo "$GH_REPO" --title "${{ inputs.release_name }}"

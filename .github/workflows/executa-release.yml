@@ -1,0 +1,145 @@
+name: Release Executa
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to create or update, for example executa-v1.0.0
+        required: true
+      ref:
+        description: Git ref to build from, for example main or a commit SHA
+        required: false
+        default: main
+      version:
+        description: Optional binary version embedded into the build. Defaults to tag.
+        required: false
+      release_name:
+        description: Optional release title override
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-amd64
+            runner: macos-15-intel
+            goos: darwin
+            goarch: amd64
+            binary_name: xurl-executa-darwin-x86_64
+            archive_name: xurl-executa_darwin_x86_64
+          - name: macos-arm64
+            runner: macos-15
+            goos: darwin
+            goarch: arm64
+            binary_name: xurl-executa-darwin-arm64
+            archive_name: xurl-executa_darwin_arm64
+          - name: windows-amd64
+            runner: windows-latest
+            goos: windows
+            goarch: amd64
+            binary_name: xurl-executa-windows-x86_64.exe
+            archive_name: xurl-executa_windows_x86_64
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build binary
+        shell: bash
+        env:
+          EXECUTA_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          version="$EXECUTA_VERSION"
+          if [[ -z "$version" ]]; then
+            version="${{ inputs.tag }}"
+          fi
+
+          bash ./build.sh \
+            --target "${{ matrix.goos }}/${{ matrix.goarch }}" \
+            --version "$version" \
+            --commit "$(git rev-parse HEAD)" \
+            --build-date "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+      - name: Package Unix asset
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release/package
+          cp "dist/${{ matrix.binary_name }}" "dist/release/package/xurl-executa"
+          tar -C dist/release/package -czf "dist/release/${{ matrix.archive_name }}.tar.gz" xurl-executa
+          shasum -a 256 "dist/release/${{ matrix.archive_name }}.tar.gz" > "dist/release/${{ matrix.archive_name }}.tar.gz.sha256"
+
+      - name: Package Windows asset
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "dist/release/package" | Out-Null
+          Copy-Item "dist/${{ matrix.binary_name }}" "dist/release/package/xurl-executa.exe"
+          Compress-Archive -Path "dist/release/package/*" -DestinationPath "dist/release/${{ matrix.archive_name }}.zip" -Force
+          $hash = (Get-FileHash -Algorithm SHA256 "dist/release/${{ matrix.archive_name }}.zip").Hash.ToLower()
+          "$hash  ${{ matrix.archive_name }}.zip" | Out-File -FilePath "dist/release/${{ matrix.archive_name }}.zip.sha256" -Encoding ascii
+
+      - name: Upload packaged assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: executa-${{ matrix.name }}
+          path: |
+            dist/release/*.tar.gz
+            dist/release/*.zip
+            dist/release/*.sha256
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download packaged assets
+        uses: actions/download-artifact@v4
+        with:
+          pattern: executa-*
+          merge-multiple: true
+          path: dist/release
+
+      - name: Create or update GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_NAME: ${{ inputs.release_name }}
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag }}"
+          target_ref="${{ inputs.ref }}"
+          title="$RELEASE_NAME"
+          if [[ -z "$title" ]]; then
+            title="$tag"
+          fi
+
+          if gh release view "$tag" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release edit "$tag" --repo "$GH_REPO" --title "$title"
+          else
+            gh release create "$tag" \
+              --repo "$GH_REPO" \
+              --target "$target_ref" \
+              --title "$title" \
+              --generate-notes
+          fi
+
+          gh release upload "$tag" dist/release/* --repo "$GH_REPO" --clobber

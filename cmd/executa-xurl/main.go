@@ -35,15 +35,16 @@ const (
 	authModeNone         = "none"
 	authModeUser         = "user"
 	authModeApp          = "app"
-	executaName          = "xurl-executa"
+	executaName          = "tool-lightvoss_5433-xurl-executa-6rbgfeke"
+	executaVersion       = "0.0.2"
 )
 
 var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
 
 var manifest = map[string]any{
 	"name":         executaName,
-	"display_name": executaName,
-	"version":      "1.0.0",
+	"display_name": "xurl-executa",
+	"version":      executaVersion,
 	"description":  "Run xurl commands from ANNA with a user OAuth2 token file and optional app-only bearer token.",
 	"author":       "xdevplatform + ANNA",
 	"credentials": []map[string]any{

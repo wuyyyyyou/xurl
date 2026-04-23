@@ -253,7 +253,7 @@ if [[ "$RUN_TEST" == "true" ]]; then
         if printf '%s' "$RESULT" | python3 -c '
 import json, sys
 payload = json.load(sys.stdin)
-assert payload["result"]["name"] == "xurl-executa"
+assert payload["result"]["name"] == "tool-lightvoss_5433-xurl-executa-6rbgfeke"
 ' 2>/dev/null; then
             echo -e "  ${GREEN}✅ describe 通过${NC}"
         else

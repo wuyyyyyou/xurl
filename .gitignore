@@ -4,3 +4,4 @@ xurl
 dist/
 .cache/
 tmp/
+.docs/

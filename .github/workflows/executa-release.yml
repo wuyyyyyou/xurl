@@ -11,8 +11,9 @@ on:
         required: false
         default: main
       version:
-        description: Optional binary version embedded into the build. Defaults to tag.
+        description: Optional binary version embedded into the build. Defaults to 1.0.0.
         required: false
+        default: 1.0.0
       release_name:
         description: Optional release title override
         required: false
@@ -66,7 +67,7 @@ jobs:
           set -euo pipefail
           version="$EXECUTA_VERSION"
           if [[ -z "$version" ]]; then
-            version="${{ inputs.tag }}"
+            version="1.0.0"
           fi
 
           bash ./build.sh \
@@ -80,18 +81,74 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dist/release/package
-          cp "dist/${{ matrix.binary_name }}" "dist/release/package/xurl-executa"
-          tar -C dist/release/package -czf "dist/release/${{ matrix.archive_name }}.tar.gz" xurl-executa
+          package_dir="dist/release/package"
+          rm -rf "$package_dir"
+          mkdir -p "$package_dir/bin" "$package_dir/lib" "$package_dir/data"
+          cp "dist/${{ matrix.binary_name }}" "$package_dir/bin/xurl-executa"
+          chmod 0755 "$package_dir/bin/xurl-executa"
+          describe_json=$(printf '%s\n' '{"jsonrpc":"2.0","method":"describe","id":1}' | "$package_dir/bin/xurl-executa" 2>/dev/null)
+          DESCRIBE_JSON="$describe_json" python3 - "$package_dir/manifest.json" <<'PY'
+          import json
+          import os
+          import sys
+
+          payload = json.loads(os.environ["DESCRIBE_JSON"])
+          result = payload["result"]
+          manifest = {
+              "name": result["name"],
+              "version": result["version"],
+              "runtime": {
+                  "binary": {
+                      "entrypoint": {
+                          "default": "bin/xurl-executa",
+                          "windows-x86_64": "bin/xurl-executa.exe",
+                          "windows-arm64": "bin/xurl-executa.exe",
+                      },
+                      "lib_dirs": ["lib"],
+                      "data_dirs": ["data"],
+                      "permissions": {
+                          "bin/xurl-executa": "0o755",
+                      },
+                  },
+              },
+          }
+          with open(sys.argv[1], "w", encoding="utf-8") as f:
+              json.dump(manifest, f, indent=2)
+              f.write("\n")
+          PY
+          tar -C "$package_dir" -czf "dist/release/${{ matrix.archive_name }}.tar.gz" bin lib data manifest.json
           shasum -a 256 "dist/release/${{ matrix.archive_name }}.tar.gz" > "dist/release/${{ matrix.archive_name }}.tar.gz.sha256"
 
       - name: Package Windows asset
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path "dist/release/package" | Out-Null
-          Copy-Item "dist/${{ matrix.binary_name }}" "dist/release/package/xurl-executa.exe"
-          Compress-Archive -Path "dist/release/package/*" -DestinationPath "dist/release/${{ matrix.archive_name }}.zip" -Force
+          $packageDir = "dist/release/package"
+          if (Test-Path $packageDir) { Remove-Item -Recurse -Force $packageDir }
+          New-Item -ItemType Directory -Force -Path "$packageDir/bin", "$packageDir/lib", "$packageDir/data" | Out-Null
+          Copy-Item "dist/${{ matrix.binary_name }}" "$packageDir/bin/xurl-executa.exe"
+          $describeJson = '{"jsonrpc":"2.0","method":"describe","id":1}' | & "$packageDir/bin/xurl-executa.exe" 2>$null
+          $describe = $describeJson | ConvertFrom-Json
+          $manifest = [ordered]@{
+            name = $describe.result.name
+            version = $describe.result.version
+            runtime = [ordered]@{
+              binary = [ordered]@{
+                entrypoint = [ordered]@{
+                  default = "bin/xurl-executa"
+                  "windows-x86_64" = "bin/xurl-executa.exe"
+                  "windows-arm64" = "bin/xurl-executa.exe"
+                }
+                lib_dirs = @("lib")
+                data_dirs = @("data")
+                permissions = [ordered]@{
+                  "bin/xurl-executa.exe" = "0o755"
+                }
+              }
+            }
+          }
+          $manifest | ConvertTo-Json -Depth 10 | Set-Content -Path "$packageDir/manifest.json" -Encoding utf8
+          Compress-Archive -Path "$packageDir/bin", "$packageDir/lib", "$packageDir/data", "$packageDir/manifest.json" -DestinationPath "dist/release/${{ matrix.archive_name }}.zip" -Force
           $hash = (Get-FileHash -Algorithm SHA256 "dist/release/${{ matrix.archive_name }}.zip").Hash.ToLower()
           "$hash  ${{ matrix.archive_name }}.zip" | Out-File -FilePath "dist/release/${{ matrix.archive_name }}.zip.sha256" -Encoding ascii
 

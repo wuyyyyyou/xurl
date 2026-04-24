@@ -36,7 +36,7 @@ const (
 	authModeUser         = "user"
 	authModeApp          = "app"
 	executaName          = "tool-lightvoss_5433-xurl-executa-6rbgfeke"
-	executaVersion       = "0.0.2"
+	executaVersion       = "1.0.0"
 )
 
 var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
@@ -129,6 +129,15 @@ type commandResult struct {
 	Stdout         string   `json:"stdout"`
 	Stderr         string   `json:"stderr"`
 	ParsedJSON     any      `json:"parsed_json,omitempty"`
+	Diagnostic     any      `json:"diagnostic,omitempty"`
+}
+
+type commandDiagnostic struct {
+	Kind              string   `json:"kind"`
+	Message           string   `json:"message"`
+	InvalidCommand    string   `json:"invalid_command,omitempty"`
+	SuggestedCommands []string `json:"suggested_commands,omitempty"`
+	UsageHint         string   `json:"usage_hint,omitempty"`
 }
 
 func main() {
@@ -247,6 +256,19 @@ func handleInvoke(req rpcRequest) rpcResponse {
 		response.Error = &rpcErr{
 			Code:    -32602,
 			Message: err.Error(),
+		}
+		return response
+	}
+
+	if diagnostic := diagnoseArgs(args); diagnostic != nil {
+		response.Error = &rpcErr{
+			Code:    -32602,
+			Message: diagnostic.Message,
+			Data: map[string]any{
+				"command":    strings.Join(args, " "),
+				"args":       args,
+				"diagnostic": diagnostic,
+			},
 		}
 		return response
 	}
@@ -608,7 +630,89 @@ func executeXURLCommand(args []string, cwd string, envVars map[string]string, se
 		result.ParsedJSON = parsed
 	}
 
+	if !result.CommandSuccess {
+		result.Diagnostic = diagnoseFailedCommand(result)
+	}
+
 	return result, nil
+}
+
+func diagnoseArgs(args []string) *commandDiagnostic {
+	if len(args) == 0 {
+		return nil
+	}
+
+	first := args[0]
+	if isRawEndpoint(first) || strings.HasPrefix(first, "-") || isKnownCommand(first) {
+		return nil
+	}
+
+	return &commandDiagnostic{
+		Kind:              "invalid_xurl_command",
+		Message:           fmt.Sprintf("%q is not a supported xurl shortcut command; use a known shortcut command or a raw X API endpoint", first),
+		InvalidCommand:    strings.Join(args, " "),
+		SuggestedCommands: suggestCommands(first),
+		UsageHint:         "Examples: [\"whoami\"], [\"user\", \"twitterdev\"], [\"/2/users/me\"], or [\"/2/users/by/username/twitterdev\"]. Use [\"help\"] to list commands.",
+	}
+}
+
+func diagnoseFailedCommand(result commandResult) *commandDiagnostic {
+	if diagnostic := diagnoseArgs(result.Args); diagnostic != nil {
+		return diagnostic
+	}
+
+	output := strings.TrimSpace(result.Stdout + "\n" + result.Stderr)
+	if output == "" {
+		return nil
+	}
+
+	if strings.Contains(output, "Error: request failed") {
+		return &commandDiagnostic{
+			Kind:      "x_api_request_failed",
+			Message:   "xurl reached the X API, but the API request failed; inspect parsed_json/stdout for HTTP status and X API error details",
+			UsageHint: "If the first argument was intended as a shortcut command, use one of: " + strings.Join(knownCommands(), ", ") + ". Raw endpoints should start with /2/ or https://.",
+		}
+	}
+
+	return nil
+}
+
+func isRawEndpoint(arg string) bool {
+	lower := strings.ToLower(arg)
+	return strings.HasPrefix(arg, "/") || strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
+}
+
+func isKnownCommand(arg string) bool {
+	for _, command := range knownCommands() {
+		if arg == command {
+			return true
+		}
+	}
+	return false
+}
+
+func knownCommands() []string {
+	return []string{
+		"auth", "bookmark", "bookmarks", "block", "completion", "delete", "dm", "dms", "follow", "followers", "following", "help", "like", "likes", "media", "mentions", "mute", "news", "post", "quote", "read", "reply", "repost", "search", "timeline", "trends", "unblock", "unbookmark", "unfollow", "unlike", "unmute", "unrepost", "user", "version", "webhook", "whoami",
+	}
+}
+
+func suggestCommands(input string) []string {
+	suggestions := make([]string, 0, 3)
+	lower := strings.ToLower(input)
+	for _, command := range knownCommands() {
+		if strings.HasPrefix(command, lower) || strings.HasPrefix(lower, command) {
+			suggestions = append(suggestions, command)
+			if len(suggestions) == 3 {
+				return suggestions
+			}
+		}
+	}
+
+	if lower == "users" {
+		return []string{"user", "whoami"}
+	}
+	return suggestions
 }
 
 func parseJSON(input string) any {

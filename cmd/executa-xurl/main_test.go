@@ -143,6 +143,54 @@ func TestBuildInvokeResponsePath(t *testing.T) {
 	}
 }
 
+func TestHandleInvokeRejectsUnknownShortcutCommand(t *testing.T) {
+	t.Parallel()
+
+	response := handleInvoke(rpcRequest{
+		JSONRPC: "2.0",
+		ID:      float64(1),
+		Params: map[string]any{
+			"tool": "run_xurl",
+			"arguments": map[string]any{
+				"args": []any{"users", "me"},
+			},
+		},
+	})
+
+	if response.Error == nil {
+		t.Fatal("expected error")
+	}
+	if response.Error.Code != -32602 {
+		t.Fatalf("unexpected error code: %d", response.Error.Code)
+	}
+	if !strings.Contains(response.Error.Message, "not a supported xurl shortcut command") {
+		t.Fatalf("unexpected error message: %q", response.Error.Message)
+	}
+
+	data, ok := response.Error.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected error data: %#v", response.Error.Data)
+	}
+	diagnostic, ok := data["diagnostic"].(*commandDiagnostic)
+	if !ok {
+		t.Fatalf("unexpected diagnostic: %#v", data["diagnostic"])
+	}
+	if diagnostic.Kind != "invalid_xurl_command" {
+		t.Fatalf("unexpected diagnostic kind: %q", diagnostic.Kind)
+	}
+	if !containsAll(strings.Join(diagnostic.SuggestedCommands, ","), "user", "whoami") {
+		t.Fatalf("unexpected suggestions: %#v", diagnostic.SuggestedCommands)
+	}
+}
+
+func TestDiagnoseArgsAllowsRawEndpoint(t *testing.T) {
+	t.Parallel()
+
+	if diagnostic := diagnoseArgs([]string{"/2/users/me"}); diagnostic != nil {
+		t.Fatalf("unexpected diagnostic: %#v", diagnostic)
+	}
+}
+
 func TestExpiredOAuth2TokenAlwaysReturnsExpiredSeed(t *testing.T) {
 	t.Parallel()
 

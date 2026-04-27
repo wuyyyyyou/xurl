@@ -1,0 +1,14 @@
+{
+    "jsonrpc": "2.0",
+    "method": "invoke",
+    "params": {
+        "tool": "run_xurl",
+        "arguments": {
+            "args": [
+                "version"
+            ],
+            "cwd": "."
+        }
+    },
+    "id": 3
+}

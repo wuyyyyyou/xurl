@@ -5,3 +5,6 @@ dist/
 .cache/
 tmp/
 .docs/
+.vscode/stdout/
+.vscode/output/
+.vscode/env

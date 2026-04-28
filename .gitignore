@@ -8,3 +8,4 @@ tmp/
 .vscode/stdout/
 .vscode/output/
 .vscode/env
+.vscode/x-oauth1-token.json

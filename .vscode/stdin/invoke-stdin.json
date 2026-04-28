@@ -1,14 +1,1 @@
-{
-    "jsonrpc": "2.0",
-    "method": "invoke",
-    "params": {
-        "tool": "run_xurl",
-        "arguments": {
-            "args": [
-                "version"
-            ],
-            "cwd": "."
-        }
-    },
-    "id": 3
-}
+{"jsonrpc":"2.0","method":"invoke","params":{"tool":"run_xurl","arguments":{"args":["/12/accounts"],"cwd":"."}},"id":3}

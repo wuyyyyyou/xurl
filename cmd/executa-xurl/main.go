@@ -25,18 +25,25 @@ import (
 )
 
 const (
-	internalCLICommand   = "__xurl_cli"
-	tokenFileCredential  = "X_OAUTH2_TOKEN_FILE"
-	bearerCredentialName = "X_BEARER_TOKEN"
-	userTokenEnvKey      = "XURL_EXECUTA_OAUTH2_ACCESS_TOKEN"
-	bearerTokenEnvKey    = "XURL_EXECUTA_BEARER_TOKEN"
-	defaultFilePerms     = 0o600
-	tempFileSuffix       = ".tmp"
-	authModeNone         = "none"
-	authModeUser         = "user"
-	authModeApp          = "app"
-	executaName          = "tool-lightvoss_5433-xurl-executa-6rbgfeke"
-	executaVersion       = "1.0.0"
+	internalCLICommand         = "__xurl_cli"
+	tokenFileCredential        = "X_OAUTH2_TOKEN_FILE"
+	oauth1TokenFileCredential  = "X_OAUTH1_TOKEN_FILE"
+	bearerCredentialName       = "X_BEARER_TOKEN"
+	userTokenEnvKey            = "XURL_EXECUTA_OAUTH2_ACCESS_TOKEN"
+	bearerTokenEnvKey          = "XURL_EXECUTA_BEARER_TOKEN"
+	oauth1ConsumerKeyEnvKey    = "XURL_EXECUTA_OAUTH1_CONSUMER_KEY"
+	oauth1ConsumerSecretEnvKey = "XURL_EXECUTA_OAUTH1_CONSUMER_SECRET"
+	oauth1AccessTokenEnvKey    = "XURL_EXECUTA_OAUTH1_ACCESS_TOKEN"
+	oauth1TokenSecretEnvKey    = "XURL_EXECUTA_OAUTH1_TOKEN_SECRET"
+	adsAPIBaseURL              = "https://ads-api.x.com"
+	defaultFilePerms           = 0o600
+	tempFileSuffix             = ".tmp"
+	authModeNone               = "none"
+	authModeUser               = "user"
+	authModeApp                = "app"
+	authModeOAuth1             = "oauth1"
+	executaName                = "tool-lightvoss_5433-xurl-executa-6rbgfeke"
+	executaVersion             = "1.0.0"
 )
 
 var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
@@ -45,7 +52,7 @@ var manifest = map[string]any{
 	"name":         executaName,
 	"display_name": "xurl-executa",
 	"version":      executaVersion,
-	"description":  "Run xurl commands from ANNA with a user OAuth2 token file and optional app-only bearer token.",
+	"description":  "Run xurl commands from ANNA with OAuth2, app-only bearer, and OAuth1 token files.",
 	"author":       "xdevplatform + ANNA",
 	"credentials": []map[string]any{
 		{
@@ -53,6 +60,13 @@ var manifest = map[string]any{
 			"display_name": "X OAuth2 Token File",
 			"description":  "Path to a JSON file with Client ID, Client Secret, Refresh Token, and optional Access Token.",
 			"required":     true,
+			"sensitive":    false,
+		},
+		{
+			"name":         oauth1TokenFileCredential,
+			"display_name": "X OAuth1 Token File",
+			"description":  "Path to a JSON file with Consumer Key, Consumer Key Secret, Access Token, and Access Token Secret. Used automatically for Ads API requests.",
+			"required":     false,
 			"sensitive":    false,
 		},
 		{
@@ -389,9 +403,10 @@ func resolveCWD(arguments map[string]any) (string, error) {
 }
 
 type authSelection struct {
-	mode          string
-	token         string
-	tokenFilePath string
+	mode            string
+	token           string
+	tokenFilePath   string
+	oauth1TokenFile oauth1TokenFile
 }
 
 type oauth2TokenFile struct {
@@ -399,6 +414,13 @@ type oauth2TokenFile struct {
 	ClientSecret string `json:"Client Secret"`
 	AccessToken  string `json:"Access Token,omitempty"`
 	RefreshToken string `json:"Refresh Token"`
+}
+
+type oauth1TokenFile struct {
+	ConsumerKey       string `json:"Consumer Key"`
+	ConsumerKeySecret string `json:"Consumer Key Secret"`
+	AccessToken       string `json:"Access Token"`
+	AccessTokenSecret string `json:"Access Token Secret"`
 }
 
 func resolveTokenFilePath(params map[string]any) string {
@@ -412,6 +434,19 @@ func resolveTokenFilePath(params map[string]any) string {
 		}
 	}
 	return strings.TrimSpace(os.Getenv(tokenFileCredential))
+}
+
+func resolveOAuth1TokenFilePath(params map[string]any) string {
+	context, _ := params["context"].(map[string]any)
+	if context != nil {
+		credentials, _ := context["credentials"].(map[string]any)
+		if credentials != nil {
+			if tokenFilePath, ok := credentials[oauth1TokenFileCredential].(string); ok {
+				return strings.TrimSpace(tokenFilePath)
+			}
+		}
+	}
+	return strings.TrimSpace(os.Getenv(oauth1TokenFileCredential))
 }
 
 func resolveBearerToken(params map[string]any) string {
@@ -432,6 +467,18 @@ func resolveAuthSelection(args []string, params map[string]any) (authSelection, 
 		return authSelection{mode: authModeNone}, nil
 	}
 
+	if requiresOAuth1Auth(args) {
+		tokenFilePath := resolveOAuth1TokenFilePath(params)
+		if tokenFilePath == "" {
+			return authSelection{}, fmt.Errorf("missing credential %q for Ads API", oauth1TokenFileCredential)
+		}
+		tokenFile, err := loadOAuth1TokenFile(tokenFilePath)
+		if err != nil {
+			return authSelection{}, err
+		}
+		return authSelection{mode: authModeOAuth1, tokenFilePath: tokenFilePath, oauth1TokenFile: tokenFile}, nil
+	}
+
 	if requiresAppOnlyAuth(args) {
 		token := resolveBearerToken(params)
 		if token == "" {
@@ -445,6 +492,36 @@ func resolveAuthSelection(args []string, params map[string]any) (authSelection, 
 		return authSelection{}, fmt.Errorf("missing credential %q", tokenFileCredential)
 	}
 	return authSelection{mode: authModeUser, tokenFilePath: tokenFilePath}, nil
+}
+
+func requiresOAuth1Auth(args []string) bool {
+	for _, arg := range args {
+		lower := strings.ToLower(strings.TrimSpace(arg))
+		if strings.Contains(lower, "ads-api.x.com") || strings.Contains(lower, "ads-api.twitter.com") {
+			return true
+		}
+		if isAdsAPIRelativePath(lower) {
+			return true
+		}
+	}
+	return false
+}
+
+func isAdsAPIRelativePath(arg string) bool {
+	if !strings.HasPrefix(arg, "/") {
+		return false
+	}
+
+	version, _, _ := strings.Cut(strings.TrimPrefix(arg, "/"), "/")
+	if version == "" || version == "2" {
+		return false
+	}
+	for _, ch := range version {
+		if ch < '0' || ch > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func requiresAppOnlyAuth(args []string) bool {
@@ -478,6 +555,8 @@ func requiresAppOnlyAuth(args []string) bool {
 
 	for _, arg := range args {
 		if strings.Contains(arg, "/2/tweets/search/all") ||
+			strings.Contains(arg, "/2/tweets/counts/recent") ||
+			strings.Contains(arg, "/2/tweets/counts/all") ||
 			strings.Contains(arg, "/2/trends/by/woeid/") ||
 			strings.Contains(arg, "/2/news/search") {
 			return true
@@ -517,6 +596,8 @@ func runXURLCommand(args []string, cwd string, auth authSelection) (commandResul
 		result, err = executeXURLCommand(args, cwd, nil, nil)
 	case authModeApp:
 		result, err = executeXURLCommand(args, cwd, map[string]string{bearerTokenEnvKey: auth.token}, []string{auth.token})
+	case authModeOAuth1:
+		result, err = executeXURLCommand(args, cwd, oauth1EnvVars(auth.oauth1TokenFile), oauth1Secrets(auth.oauth1TokenFile))
 	case authModeUser:
 		result, err = executeUserXURLCommand(args, cwd, auth.tokenFilePath)
 	default:
@@ -527,6 +608,25 @@ func runXURLCommand(args []string, cwd string, auth authSelection) (commandResul
 	}
 
 	return result, nil
+}
+
+func oauth1EnvVars(tokenFile oauth1TokenFile) map[string]string {
+	return map[string]string{
+		oauth1ConsumerKeyEnvKey:    tokenFile.ConsumerKey,
+		oauth1ConsumerSecretEnvKey: tokenFile.ConsumerKeySecret,
+		oauth1AccessTokenEnvKey:    tokenFile.AccessToken,
+		oauth1TokenSecretEnvKey:    tokenFile.AccessTokenSecret,
+		"API_BASE_URL":             adsAPIBaseURL,
+	}
+}
+
+func oauth1Secrets(tokenFile oauth1TokenFile) []string {
+	return []string{
+		tokenFile.ConsumerKey,
+		tokenFile.ConsumerKeySecret,
+		tokenFile.AccessToken,
+		tokenFile.AccessTokenSecret,
+	}
 }
 
 func executeUserXURLCommand(args []string, cwd string, tokenFilePath string) (commandResult, error) {
@@ -779,6 +879,41 @@ func loadOAuth2TokenFile(path string) (oauth2TokenFile, error) {
 		return oauth2TokenFile{}, fmt.Errorf("token file %q is missing required field %q", absPath, "Client Secret")
 	case tokenFile.RefreshToken == "":
 		return oauth2TokenFile{}, fmt.Errorf("token file %q is missing required field %q", absPath, "Refresh Token")
+	}
+
+	return tokenFile, nil
+}
+
+func loadOAuth1TokenFile(path string) (oauth1TokenFile, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return oauth1TokenFile{}, fmt.Errorf("failed to resolve OAuth1 token file path: %w", err)
+	}
+
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		return oauth1TokenFile{}, fmt.Errorf("failed to read OAuth1 token file %q: %w", absPath, err)
+	}
+
+	var tokenFile oauth1TokenFile
+	if err := json.Unmarshal(data, &tokenFile); err != nil {
+		return oauth1TokenFile{}, fmt.Errorf("failed to parse OAuth1 token file %q: %w", absPath, err)
+	}
+
+	tokenFile.ConsumerKey = strings.TrimSpace(tokenFile.ConsumerKey)
+	tokenFile.ConsumerKeySecret = strings.TrimSpace(tokenFile.ConsumerKeySecret)
+	tokenFile.AccessToken = strings.TrimSpace(tokenFile.AccessToken)
+	tokenFile.AccessTokenSecret = strings.TrimSpace(tokenFile.AccessTokenSecret)
+
+	switch {
+	case tokenFile.ConsumerKey == "":
+		return oauth1TokenFile{}, fmt.Errorf("OAuth1 token file %q is missing required field %q", absPath, "Consumer Key")
+	case tokenFile.ConsumerKeySecret == "":
+		return oauth1TokenFile{}, fmt.Errorf("OAuth1 token file %q is missing required field %q", absPath, "Consumer Key Secret")
+	case tokenFile.AccessToken == "":
+		return oauth1TokenFile{}, fmt.Errorf("OAuth1 token file %q is missing required field %q", absPath, "Access Token")
+	case tokenFile.AccessTokenSecret == "":
+		return oauth1TokenFile{}, fmt.Errorf("OAuth1 token file %q is missing required field %q", absPath, "Access Token Secret")
 	}
 
 	return tokenFile, nil

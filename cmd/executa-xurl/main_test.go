@@ -31,6 +31,29 @@ func TestLoadOAuth2TokenFileRequiresFields(t *testing.T) {
 	}
 }
 
+func TestLoadOAuth1TokenFileRequiresFields(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "oauth1-token.json")
+	content := `{
+  "Consumer Key": "consumer-key",
+  "Consumer Key Secret": "",
+  "Access Token": "access-token",
+  "Access Token Secret": "access-token-secret"
+}`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write OAuth1 token file: %v", err)
+	}
+
+	_, err := loadOAuth1TokenFile(path)
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if got := err.Error(); got == "" || !containsAll(got, "Consumer Key Secret", "missing required field") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestPersistOAuth2TokenFileUpdatesAccessToken(t *testing.T) {
 	t.Parallel()
 
@@ -128,6 +151,81 @@ func TestResolveAuthSelectionSkipsAuthForVersion(t *testing.T) {
 
 	if selection.mode != authModeNone {
 		t.Fatalf("unexpected auth mode: %s", selection.mode)
+	}
+}
+
+func TestResolveAuthSelectionUsesBearerForTweetCounts(t *testing.T) {
+	t.Parallel()
+
+	for _, endpoint := range []string{
+		"/2/tweets/counts/recent?query=from%3AAnna_Partners%20has%3Amedia",
+		"/2/tweets/counts/all?query=from%3AAnna_Partners%20is%3Areply",
+	} {
+		endpoint := endpoint
+		t.Run(endpoint, func(t *testing.T) {
+			t.Parallel()
+
+			selection, err := resolveAuthSelection([]string{endpoint}, map[string]any{
+				"context": map[string]any{
+					"credentials": map[string]any{
+						bearerCredentialName: "bearer-token",
+					},
+				},
+			})
+			if err != nil {
+				t.Fatalf("resolve auth selection: %v", err)
+			}
+
+			if selection.mode != authModeApp {
+				t.Fatalf("unexpected auth mode: %s", selection.mode)
+			}
+			if selection.token != "bearer-token" {
+				t.Fatalf("unexpected bearer token: %q", selection.token)
+			}
+		})
+	}
+}
+
+func TestResolveAuthSelectionUsesOAuth1ForAdsAPI(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "oauth1-token.json")
+	content := `{
+  "Consumer Key": "consumer-key",
+  "Consumer Key Secret": "consumer-key-secret",
+  "Access Token": "access-token",
+  "Access Token Secret": "access-token-secret"
+}`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write OAuth1 token file: %v", err)
+	}
+
+	for _, endpoint := range []string{
+		"https://ads-api.x.com/11/accounts",
+		"/11/accounts",
+	} {
+		endpoint := endpoint
+		t.Run(endpoint, func(t *testing.T) {
+			t.Parallel()
+
+			selection, err := resolveAuthSelection([]string{endpoint}, map[string]any{
+				"context": map[string]any{
+					"credentials": map[string]any{
+						oauth1TokenFileCredential: path,
+					},
+				},
+			})
+			if err != nil {
+				t.Fatalf("resolve auth selection: %v", err)
+			}
+
+			if selection.mode != authModeOAuth1 {
+				t.Fatalf("unexpected auth mode: %s", selection.mode)
+			}
+			if selection.oauth1TokenFile.ConsumerKey != "consumer-key" {
+				t.Fatalf("unexpected consumer key: %q", selection.oauth1TokenFile.ConsumerKey)
+			}
+		})
 	}
 }
 

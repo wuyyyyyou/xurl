@@ -20,6 +20,15 @@ import (
 	"path/filepath"
 )
 
+const (
+	executaOAuth2AccessTokenEnvKey    = "XURL_EXECUTA_OAUTH2_ACCESS_TOKEN"
+	executaBearerTokenEnvKey          = "XURL_EXECUTA_BEARER_TOKEN"
+	executaOAuth1ConsumerKeyEnvKey    = "XURL_EXECUTA_OAUTH1_CONSUMER_KEY"
+	executaOAuth1ConsumerSecretEnvKey = "XURL_EXECUTA_OAUTH1_CONSUMER_SECRET"
+	executaOAuth1AccessTokenEnvKey    = "XURL_EXECUTA_OAUTH1_ACCESS_TOKEN"
+	executaOAuth1TokenSecretEnvKey    = "XURL_EXECUTA_OAUTH1_TOKEN_SECRET"
+)
+
 // RequestOptions contains common options for API requests
 type RequestOptions struct {
 	Method   string
@@ -310,10 +319,14 @@ func (c *ApiClient) buildBaseRequest(method, endpoint string, body io.Reader, co
 
 	// Add authorization header if not already set
 	if req.Header.Get("Authorization") == "" {
-		if accessToken := strings.TrimSpace(os.Getenv("XURL_EXECUTA_OAUTH2_ACCESS_TOKEN")); accessToken != "" {
+		if accessToken := strings.TrimSpace(os.Getenv(executaOAuth2AccessTokenEnvKey)); accessToken != "" {
 			req.Header.Add("Authorization", "Bearer "+accessToken)
-		} else if bearerToken := strings.TrimSpace(os.Getenv("XURL_EXECUTA_BEARER_TOKEN")); bearerToken != "" {
+		} else if bearerToken := strings.TrimSpace(os.Getenv(executaBearerTokenEnvKey)); bearerToken != "" {
 			req.Header.Add("Authorization", "Bearer "+bearerToken)
+		} else if oauth1Header, ok, err := executaOAuth1HeaderFromEnv(httpMethod, url); err != nil {
+			return nil, err
+		} else if ok {
+			req.Header.Add("Authorization", oauth1Header)
 		} else {
 			authHeader, err := c.getAuthHeader(httpMethod, url, authType, username)
 			if err == nil {
@@ -330,6 +343,40 @@ func (c *ApiClient) buildBaseRequest(method, endpoint string, body io.Reader, co
 	}
 
 	return req, nil
+}
+
+func executaOAuth1HeaderFromEnv(method, url string) (string, bool, error) {
+	consumerKey := strings.TrimSpace(os.Getenv(executaOAuth1ConsumerKeyEnvKey))
+	consumerSecret := strings.TrimSpace(os.Getenv(executaOAuth1ConsumerSecretEnvKey))
+	accessToken := strings.TrimSpace(os.Getenv(executaOAuth1AccessTokenEnvKey))
+	tokenSecret := strings.TrimSpace(os.Getenv(executaOAuth1TokenSecretEnvKey))
+
+	if consumerKey == "" && consumerSecret == "" && accessToken == "" && tokenSecret == "" {
+		return "", false, nil
+	}
+
+	missing := make([]string, 0, 4)
+	if consumerKey == "" {
+		missing = append(missing, executaOAuth1ConsumerKeyEnvKey)
+	}
+	if consumerSecret == "" {
+		missing = append(missing, executaOAuth1ConsumerSecretEnvKey)
+	}
+	if accessToken == "" {
+		missing = append(missing, executaOAuth1AccessTokenEnvKey)
+	}
+	if tokenSecret == "" {
+		missing = append(missing, executaOAuth1TokenSecretEnvKey)
+	}
+	if len(missing) > 0 {
+		return "", false, xurlErrors.NewAuthError("OAuth1EnvIncomplete", fmt.Errorf("missing OAuth1 env values: %s", strings.Join(missing, ", ")))
+	}
+
+	header, err := auth.BuildOAuth1Header(method, url, nil, consumerKey, consumerSecret, accessToken, tokenSecret)
+	if err != nil {
+		return "", false, err
+	}
+	return header, true, nil
 }
 
 // GetAuthHeader gets the authorization header for a request

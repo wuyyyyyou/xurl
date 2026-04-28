@@ -100,7 +100,19 @@ func (a *Auth) GetOAuth1Header(method, urlStr string, additionalParams map[strin
 	}
 
 	oauth1Token := token.OAuth1
+	return BuildOAuth1Header(
+		method,
+		urlStr,
+		additionalParams,
+		oauth1Token.ConsumerKey,
+		oauth1Token.ConsumerSecret,
+		oauth1Token.AccessToken,
+		oauth1Token.TokenSecret,
+	)
+}
 
+// BuildOAuth1Header builds an OAuth 1.0a authorization header from explicit credentials.
+func BuildOAuth1Header(method, urlStr string, additionalParams map[string]string, consumerKey, consumerSecret, accessToken, tokenSecret string) (string, error) {
 	parsedURL, err := url.Parse(urlStr)
 	if err != nil {
 		return "", xurlErrors.NewAuthError("InvalidURL", err)
@@ -117,25 +129,25 @@ func (a *Auth) GetOAuth1Header(method, urlStr string, additionalParams map[strin
 		params[key] = value
 	}
 
-	params["oauth_consumer_key"] = oauth1Token.ConsumerKey
+	params["oauth_consumer_key"] = consumerKey
 	params["oauth_nonce"] = generateNonce()
 	params["oauth_signature_method"] = "HMAC-SHA1"
 	params["oauth_timestamp"] = generateTimestamp()
-	params["oauth_token"] = oauth1Token.AccessToken
+	params["oauth_token"] = accessToken
 	params["oauth_version"] = "1.0"
 
-	signature, err := generateSignature(method, urlStr, params, oauth1Token.ConsumerSecret, oauth1Token.TokenSecret)
+	signature, err := generateSignature(method, urlStr, params, consumerSecret, tokenSecret)
 	if err != nil {
 		return "", xurlErrors.NewAuthError("SignatureGenerationError", err)
 	}
 
 	var oauthParams []string
-	oauthParams = append(oauthParams, fmt.Sprintf("oauth_consumer_key=\"%s\"", encode(oauth1Token.ConsumerKey)))
+	oauthParams = append(oauthParams, fmt.Sprintf("oauth_consumer_key=\"%s\"", encode(consumerKey)))
 	oauthParams = append(oauthParams, fmt.Sprintf("oauth_nonce=\"%s\"", encode(params["oauth_nonce"])))
 	oauthParams = append(oauthParams, fmt.Sprintf("oauth_signature=\"%s\"", encode(signature)))
 	oauthParams = append(oauthParams, fmt.Sprintf("oauth_signature_method=\"%s\"", encode("HMAC-SHA1")))
 	oauthParams = append(oauthParams, fmt.Sprintf("oauth_timestamp=\"%s\"", encode(params["oauth_timestamp"])))
-	oauthParams = append(oauthParams, fmt.Sprintf("oauth_token=\"%s\"", encode(oauth1Token.AccessToken)))
+	oauthParams = append(oauthParams, fmt.Sprintf("oauth_token=\"%s\"", encode(accessToken)))
 	oauthParams = append(oauthParams, fmt.Sprintf("oauth_version=\"%s\"", encode("1.0")))
 
 	return "OAuth " + strings.Join(oauthParams, ", "), nil

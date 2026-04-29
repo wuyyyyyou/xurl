@@ -43,7 +43,7 @@ const (
 	authModeApp                = "app"
 	authModeOAuth1             = "oauth1"
 	executaName                = "tool-lightvoss_5433-xurl-executa-6rbgfeke"
-	executaVersion             = "1.0.0"
+	executaVersion             = "1.0.1"
 	outputJSONPathArgument     = "output_json_path"
 )
 

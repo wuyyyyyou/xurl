@@ -1,15 +1,1 @@
-{
-  "jsonrpc": "2.0",
-  "method": "invoke",
-  "params": {
-    "tool": "run_xurl",
-    "arguments": {
-      "args": [
-        "/2/tweets/search/all?query=from%3AAnna_Partners%20is%3Areply&max_results=10&tweet.fields=id,text,created_at,public_metrics"
-      ],
-      "cwd": ".",
-      "output_json_path": "./result.json"
-    }
-  },
-  "id": 3
-}
+{"jsonrpc":"2.0","method":"invoke","params":{"tool":"run_xurl","arguments":{"args":["delete-batch","2030645619673673992","2035571970364842462"],"cwd":".","output_json_path":"./result.json"}},"id":3}

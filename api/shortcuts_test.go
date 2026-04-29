@@ -75,6 +75,10 @@ func setupShortcutServer() *httptest.Server {
 			w.Write([]byte(`{"data":{"id":"99999","text":"Hello!"}}`))
 
 		// DELETE /2/tweets/:id — delete post
+		case r.Method == "DELETE" && r.URL.Path == "/2/tweets/fail":
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"errors":[{"message":"cannot delete post"}]}`))
+
 		case r.Method == "DELETE" && strings.HasPrefix(r.URL.Path, "/2/tweets/"):
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{"data":{"deleted":true}}`))
@@ -205,6 +209,40 @@ func TestDeletePost(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(resp, &result))
 	assert.True(t, result.Data.Deleted)
+}
+
+func TestDeletePostsSummarizesSuccessesAndFailures(t *testing.T) {
+	server := setupShortcutServer()
+	defer server.Close()
+	client := shortcutClient(t, server)
+
+	resp, err := DeletePosts(client, []string{
+		"123",
+		"https://x.com/user/status/456",
+		"fail",
+	}, baseTestOpts())
+	require.NoError(t, err)
+
+	var result DeletePostsSummary
+	require.NoError(t, json.Unmarshal(resp, &result))
+
+	assert.Equal(t, 3, result.Data.Total)
+	assert.Equal(t, 2, result.Data.Succeeded)
+	assert.Equal(t, 1, result.Data.Failed)
+	require.Len(t, result.Data.Results, 3)
+
+	assert.Equal(t, "123", result.Data.Results[0].Input)
+	assert.Equal(t, "123", result.Data.Results[0].PostID)
+	assert.True(t, result.Data.Results[0].Success)
+	assert.NotEmpty(t, result.Data.Results[0].Response)
+
+	assert.Equal(t, "https://x.com/user/status/456", result.Data.Results[1].Input)
+	assert.Equal(t, "456", result.Data.Results[1].PostID)
+	assert.True(t, result.Data.Results[1].Success)
+
+	assert.Equal(t, "fail", result.Data.Results[2].PostID)
+	assert.False(t, result.Data.Results[2].Success)
+	assert.Contains(t, result.Data.Results[2].Error, "cannot delete post")
 }
 
 // ---- ReadPost ----

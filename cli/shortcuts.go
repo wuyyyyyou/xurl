@@ -113,6 +113,7 @@ func CreateShortcutCommands(rootCmd *cobra.Command, a *auth.Auth) {
 		replyCmd(a),
 		quoteCmd(a),
 		deleteCmd(a),
+		deleteBatchCmd(a),
 		readCmd(a),
 		searchCmd(a),
 		trendsCmd(a),
@@ -225,6 +226,29 @@ Examples:
 			client := newClient(a)
 			opts := baseOpts(cmd)
 			printResult(api.DeletePost(client, args[0], opts))
+		},
+	}
+	addCommonFlags(cmd)
+	return cmd
+}
+
+func deleteBatchCmd(a *auth.Auth) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "delete-batch POST_ID_OR_URL...",
+		Short: "Delete multiple posts",
+		Long: `Delete multiple of your posts. Accepts post IDs or full URLs.
+
+Each post is deleted with the single-post delete API. The final output
+summarizes total, succeeded, failed, and the per-post response or error.
+
+Examples:
+  xurl delete-batch 1234567890 2345678901
+  xurl delete-batch https://x.com/user/status/1234567890 https://x.com/user/status/2345678901`,
+		Args: cobra.MinimumNArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			client := newClient(a)
+			opts := baseOpts(cmd)
+			printResult(api.DeletePosts(client, args, opts))
 		},
 	}
 	addCommonFlags(cmd)

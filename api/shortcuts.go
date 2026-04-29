@@ -28,6 +28,25 @@ const (
 	SearchScopeAll    SearchScope = "all"
 )
 
+type DeletePostsSummary struct {
+	Data DeletePostsSummaryData `json:"data"`
+}
+
+type DeletePostsSummaryData struct {
+	Total     int                `json:"total"`
+	Succeeded int                `json:"succeeded"`
+	Failed    int                `json:"failed"`
+	Results   []DeletePostResult `json:"results"`
+}
+
+type DeletePostResult struct {
+	Input    string          `json:"input"`
+	PostID   string          `json:"post_id"`
+	Success  bool            `json:"success"`
+	Response json.RawMessage `json:"response,omitempty"`
+	Error    string          `json:"error,omitempty"`
+}
+
 // ------------------------------------------------
 // Request‑body helpers for the X API v2 shortcuts
 // ------------------------------------------------
@@ -166,6 +185,42 @@ func DeletePost(client Client, postID string, opts RequestOptions) (json.RawMess
 	opts.Data = ""
 
 	return client.SendRequest(opts)
+}
+
+// DeletePosts deletes multiple posts one by one and returns a per-post summary.
+func DeletePosts(client Client, postIDs []string, opts RequestOptions) (json.RawMessage, error) {
+	summary := DeletePostsSummary{
+		Data: DeletePostsSummaryData{
+			Total:   len(postIDs),
+			Results: make([]DeletePostResult, 0, len(postIDs)),
+		},
+	}
+
+	for _, input := range postIDs {
+		postID := ResolvePostID(input)
+		result := DeletePostResult{
+			Input:  input,
+			PostID: postID,
+		}
+
+		resp, err := DeletePost(client, postID, opts)
+		if err != nil {
+			result.Error = err.Error()
+			summary.Data.Failed++
+		} else {
+			result.Success = true
+			result.Response = resp
+			summary.Data.Succeeded++
+		}
+
+		summary.Data.Results = append(summary.Data.Results, result)
+	}
+
+	data, err := json.Marshal(summary)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal delete batch summary: %w", err)
+	}
+	return data, nil
 }
 
 // ReadPost fetches a single post with useful expansions.

@@ -43,7 +43,7 @@ const (
 	authModeApp                = "app"
 	authModeOAuth1             = "oauth1"
 	executaName                = "tool-lightvoss_5433-xurl-executa-6rbgfeke"
-	executaVersion             = "1.0.1"
+	executaVersion             = "1.0.2"
 	outputJSONPathArgument     = "output_json_path"
 )
 
@@ -861,7 +861,7 @@ func isKnownCommand(arg string) bool {
 
 func knownCommands() []string {
 	return []string{
-		"auth", "bookmark", "bookmarks", "block", "completion", "delete", "dm", "dms", "follow", "followers", "following", "help", "like", "likes", "media", "mentions", "mute", "news", "post", "quote", "read", "reply", "repost", "search", "timeline", "trends", "unblock", "unbookmark", "unfollow", "unlike", "unmute", "unrepost", "user", "version", "webhook", "whoami",
+		"auth", "bookmark", "bookmarks", "block", "completion", "delete", "delete-batch", "dm", "dms", "follow", "followers", "following", "help", "like", "likes", "media", "mentions", "mute", "news", "post", "quote", "read", "reply", "repost", "search", "timeline", "trends", "unblock", "unbookmark", "unfollow", "unlike", "unmute", "unrepost", "user", "version", "webhook", "whoami",
 	}
 }
 

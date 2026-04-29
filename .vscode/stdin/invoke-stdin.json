@@ -1,1 +1,15 @@
-{"jsonrpc":"2.0","method":"invoke","params":{"tool":"run_xurl","arguments":{"args":["/12/accounts"],"cwd":"."}},"id":3}
+{
+  "jsonrpc": "2.0",
+  "method": "invoke",
+  "params": {
+    "tool": "run_xurl",
+    "arguments": {
+      "args": [
+        "/2/tweets/search/all?query=from%3AAnna_Partners%20is%3Areply&max_results=10&tweet.fields=id,text,created_at,public_metrics"
+      ],
+      "cwd": ".",
+      "output_json_path": "./result.json"
+    }
+  },
+  "id": 3
+}

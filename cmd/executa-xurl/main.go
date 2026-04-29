@@ -44,6 +44,7 @@ const (
 	authModeOAuth1             = "oauth1"
 	executaName                = "tool-lightvoss_5433-xurl-executa-6rbgfeke"
 	executaVersion             = "1.0.0"
+	outputJSONPathArgument     = "output_json_path"
 )
 
 var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
@@ -80,7 +81,7 @@ var manifest = map[string]any{
 	"tools": []map[string]any{
 		{
 			"name":        "run_xurl",
-			"description": "Run a non-streaming xurl command and write the full result to a JSON file in cwd.",
+			"description": "Run a non-streaming xurl command. Large default responses use file transport; optional output_json_path writes result data to a JSON file.",
 			"parameters": []map[string]any{
 				{
 					"name":        "args",
@@ -93,6 +94,12 @@ var manifest = map[string]any{
 					"name":        "cwd",
 					"type":        "string",
 					"description": "Working directory and output directory. Defaults to the plugin binary directory.",
+					"required":    false,
+				},
+				{
+					"name":        outputJSONPathArgument,
+					"type":        "string",
+					"description": "Optional JSON file path for result.data. When set, the file is overwritten and stdout returns only a JSON-RPC summary with the output path.",
 					"required":    false,
 				},
 			},
@@ -112,11 +119,12 @@ type rpcRequest struct {
 }
 
 type rpcResponse struct {
-	JSONRPC  string  `json:"jsonrpc"`
-	ID       any     `json:"id"`
-	Result   any     `json:"result,omitempty"`
-	Error    *rpcErr `json:"error,omitempty"`
-	FilePath string  `json:"-"`
+	JSONRPC          string  `json:"jsonrpc"`
+	ID               any     `json:"id"`
+	Result           any     `json:"result,omitempty"`
+	Error            *rpcErr `json:"error,omitempty"`
+	FilePath         string  `json:"-"`
+	UseFileTransport bool    `json:"-"`
 }
 
 type rpcErr struct {
@@ -195,11 +203,11 @@ func runPlugin() {
 					Message: "Parse error",
 					Data:    err.Error(),
 				},
-			}, false)
+			})
 			continue
 		}
 
-		sendResponse(handleRequest(req), req.Method == "invoke")
+		sendResponse(handleRequest(req))
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -235,8 +243,9 @@ func handleRequest(req rpcRequest) rpcResponse {
 func handleInvoke(req rpcRequest) rpcResponse {
 	toolName, _ := req.Params["tool"].(string)
 	response := rpcResponse{
-		JSONRPC: "2.0",
-		ID:      req.ID,
+		JSONRPC:          "2.0",
+		ID:               req.ID,
+		UseFileTransport: true,
 	}
 	if toolName != "run_xurl" {
 		response.Error = &rpcErr{
@@ -251,10 +260,23 @@ func handleInvoke(req rpcRequest) rpcResponse {
 	if arguments == nil {
 		arguments = map[string]any{}
 	}
+	if hasOutputJSONPath(arguments) {
+		response.UseFileTransport = false
+	}
 
 	cwd, cwdErr := resolveCWD(arguments)
+	outputJSONPath := ""
 	if cwdErr == nil {
 		response.FilePath = buildInvokeResponsePath(cwd)
+		var outputPathErr error
+		outputJSONPath, outputPathErr = resolveOutputJSONPath(arguments, cwd)
+		if outputPathErr != nil {
+			response.Error = &rpcErr{
+				Code:    -32602,
+				Message: outputPathErr.Error(),
+			}
+			return response
+		}
 	}
 
 	args, err := getArgs(arguments)
@@ -325,10 +347,28 @@ func handleInvoke(req rpcRequest) rpcResponse {
 		return response
 	}
 
+	responseData := any(result)
+	if outputJSONPath != "" {
+		if err := writeJSONFile(outputJSONPath, result); err != nil {
+			response.Error = &rpcErr{
+				Code:    -32603,
+				Message: "Failed to write output JSON file",
+				Data: map[string]any{
+					"output_json_path": outputJSONPath,
+					"error":            err.Error(),
+				},
+			}
+			return response
+		}
+		responseData = map[string]any{
+			"output_json_path": outputJSONPath,
+		}
+	}
+
 	response.Result = map[string]any{
 		"success": true,
 		"tool":    toolName,
-		"data":    result,
+		"data":    responseData,
 	}
 	return response
 }
@@ -400,6 +440,34 @@ func resolveCWD(arguments map[string]any) (string, error) {
 		return "", fmt.Errorf("failed to resolve executable path: %w", err)
 	}
 	return filepath.Dir(execPath), nil
+}
+
+func hasOutputJSONPath(arguments map[string]any) bool {
+	raw, ok := arguments[outputJSONPathArgument].(string)
+	return ok && strings.TrimSpace(raw) != ""
+}
+
+func resolveOutputJSONPath(arguments map[string]any, cwd string) (string, error) {
+	raw, ok := arguments[outputJSONPathArgument].(string)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return "", nil
+	}
+
+	outputPath := strings.TrimSpace(raw)
+	if !filepath.IsAbs(outputPath) {
+		outputPath = filepath.Join(cwd, outputPath)
+	}
+	abs, err := filepath.Abs(outputPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve %s: %w", outputJSONPathArgument, err)
+	}
+
+	parent := filepath.Dir(abs)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return "", fmt.Errorf("failed to create %s parent directory: %w", outputJSONPathArgument, err)
+	}
+
+	return abs, nil
 }
 
 type authSelection struct {
@@ -1027,8 +1095,8 @@ func appendDiagnostic(input string, message string) string {
 	return input + "\n" + message
 }
 
-func sendResponse(resp rpcResponse, useFileTransport bool) {
-	if !useFileTransport {
+func sendResponse(resp rpcResponse) {
+	if !resp.UseFileTransport {
 		payload, err := json.Marshal(resp)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to marshal response: %v\n", err)

@@ -252,7 +252,7 @@ rm -rf $X_CWD
 
 ## 10. 验证二进制直接输出
 
-如果你不通过 `xrun` 辅助函数，而是直接把一条 `invoke` 请求喂给二进制，那么标准输出 `stdout` 返回的是一个指向协议响应文件的 JSON 对象，其中会明确包含 `__file_transport` 字段。
+如果你不通过 `xrun` 辅助函数，而是直接把一条未设置 `output_json_path` 的 `invoke` 请求喂给二进制，那么标准输出 `stdout` 返回的是一个指向协议响应文件的 JSON 对象，其中会明确包含 `__file_transport` 字段。
 
 你可以直接执行：
 
@@ -292,8 +292,9 @@ cat $resp_file | jq .
 补充说明：
 
 - `describe` 和 `health` 不走 `__file_transport`
-- 只有 `invoke` 会统一走 `__file_transport`
-- 这正是为了避免命令结果过大时直接塞进 stdout
+- 未设置 `output_json_path` 的 `invoke` 默认走 `__file_transport`
+- 设置 `output_json_path` 的 `invoke` 会把原本的 `result.data` 写入该 JSON 文件，stdout 返回符合 JSON-RPC 规范的轻量 `result.data.output_json_path`
+- 这正是为了避免命令结果过大时直接塞进 stdout，同时允许调用方指定稳定的结果文件路径
 
 成功时，响应文件内容类似：
 

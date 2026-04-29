@@ -241,6 +241,144 @@ func TestBuildInvokeResponsePath(t *testing.T) {
 	}
 }
 
+func TestResolveOutputJSONPathUsesCWDForRelativePath(t *testing.T) {
+	t.Parallel()
+
+	cwd := t.TempDir()
+	path, err := resolveOutputJSONPath(map[string]any{
+		outputJSONPathArgument: "nested/result.json",
+	}, cwd)
+	if err != nil {
+		t.Fatalf("resolve output json path: %v", err)
+	}
+
+	want := filepath.Join(cwd, "nested", "result.json")
+	if path != want {
+		t.Fatalf("unexpected output path: got %q want %q", path, want)
+	}
+	if _, err := os.Stat(filepath.Dir(path)); err != nil {
+		t.Fatalf("expected parent directory to exist: %v", err)
+	}
+}
+
+func TestHandleInvokeValidationErrorUsesFileTransportByDefault(t *testing.T) {
+	t.Parallel()
+
+	cwd := t.TempDir()
+	response := handleInvoke(rpcRequest{
+		JSONRPC: "2.0",
+		ID:      float64(1),
+		Params: map[string]any{
+			"tool": "run_xurl",
+			"arguments": map[string]any{
+				"args": []any{"auth"},
+				"cwd":  cwd,
+			},
+		},
+	})
+
+	if response.Error == nil {
+		t.Fatal("expected validation error")
+	}
+	if !response.UseFileTransport {
+		t.Fatal("expected default invoke response to use file transport")
+	}
+	if !strings.HasPrefix(response.FilePath, filepath.Join(cwd, "executa-response-")) {
+		t.Fatalf("unexpected file transport path: %q", response.FilePath)
+	}
+}
+
+func TestHandleInvokeWithOutputJSONPathDisablesFileTransportForValidationErrors(t *testing.T) {
+	t.Parallel()
+
+	cwd := t.TempDir()
+	response := handleInvoke(rpcRequest{
+		JSONRPC: "2.0",
+		ID:      float64(1),
+		Params: map[string]any{
+			"tool": "run_xurl",
+			"arguments": map[string]any{
+				"args":                 []any{"auth"},
+				"cwd":                  cwd,
+				outputJSONPathArgument: "result.json",
+			},
+		},
+	})
+
+	if response.Error == nil {
+		t.Fatal("expected validation error")
+	}
+	if response.UseFileTransport {
+		t.Fatal("did not expect output_json_path response to use file transport")
+	}
+}
+
+func TestOutputJSONPathResultShapeAndFileContent(t *testing.T) {
+	t.Parallel()
+
+	cwd := t.TempDir()
+	outputPath, err := resolveOutputJSONPath(map[string]any{
+		outputJSONPathArgument: "result.json",
+	}, cwd)
+	if err != nil {
+		t.Fatalf("resolve output json path: %v", err)
+	}
+
+	commandData := commandResult{
+		Command:        "version",
+		Args:           []string{"version"},
+		Cwd:            cwd,
+		CommandSuccess: true,
+		Stdout:         "xurl version test\n",
+	}
+	if err := writeJSONFile(outputPath, commandData); err != nil {
+		t.Fatalf("write output json file: %v", err)
+	}
+
+	response := rpcResponse{
+		JSONRPC: "2.0",
+		ID:      float64(1),
+		Result: map[string]any{
+			"success": true,
+			"tool":    "run_xurl",
+			"data": map[string]any{
+				"output_json_path": outputPath,
+			},
+		},
+	}
+
+	result, ok := response.Result.(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected result: %#v", response.Result)
+	}
+	data, ok := result["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected result data: %#v", result["data"])
+	}
+	responseOutputPath, ok := data["output_json_path"].(string)
+	if !ok || responseOutputPath == "" {
+		t.Fatalf("unexpected output_json_path: %#v", data["output_json_path"])
+	}
+	if responseOutputPath != filepath.Join(cwd, "result.json") {
+		t.Fatalf("unexpected output path: got %q", responseOutputPath)
+	}
+
+	fileData, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read output json file: %v", err)
+	}
+	var decoded commandResult
+	if err := json.Unmarshal(fileData, &decoded); err != nil {
+		t.Fatalf("unmarshal output json file: %v", err)
+	}
+	if decoded.Command != commandData.Command {
+		t.Fatalf("unexpected command in output file: %q", decoded.Command)
+	}
+	if !decoded.CommandSuccess {
+		t.Fatalf("expected command success in output file: %#v", decoded)
+	}
+}
+
 func TestHandleInvokeRejectsUnknownShortcutCommand(t *testing.T) {
 	t.Parallel()
 
